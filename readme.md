@@ -189,3 +189,9 @@ get remote_file.txt
 ```
 
 
+
+
+http://127.0.0.1:9080/
+http://127.0.0.1:9080/html-fix
+http://127.0.0.1:9080/prompt
+http://127.0.0.1:9080/doc

@@ -1,0 +1,1265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔧 HTML修复工具</title>
+    <link rel="stylesheet" href="https://unpkg.com/github-markdown-css/github-markdown-light.css" />
+    <style>
+        /* 全局重置和基础样式 */
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        [v-cloak] {
+            display: none !important;
+        }
+
+        html {
+            padding: 0;
+            margin: 0;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        h1, h2, h3, label {
+            user-select: none;
+        }
+
+        a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        a + a {
+            margin-left: 12px;
+        }
+
+        /* 布局容器和结构 */
+        .container {
+            max-width: 1440px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .main-content {
+            display: flex;
+            min-height: calc(100vh - 40px - 120px);
+        }
+
+        .left-panel {
+            flex: 1;
+            position: relative;
+            max-width: 50%;
+            padding: 20px;
+            border-right: 1px solid #e0e0e0;
+            background-color: #fafafa;
+        }
+
+        .right-panel {
+            flex: 1;
+            max-width: 50%;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* 头部区域 */
+        .header {
+            position: relative;
+            height: 120px;
+            padding: 20px 12px 0;
+            text-align: center;
+            color: white;
+            background: linear-gradient(160deg, #0a0a2e, #16213e, #3b108b, #b83dba);
+        }
+
+        .header h1 {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 2px 0 0;
+            padding: 0;
+            font-size: 2rem;
+            z-index: 1;
+        }
+
+        .header h1 small {
+            display: inline-block;
+            margin-top: -0.3em;
+            margin-left: 0.7em;
+            font-size: 0.7em;
+            animation: breath 3s infinite;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .header p {
+            position: relative;
+            margin: 12px 0 0;
+            font-size: 0.92em;
+            user-select: none;
+            z-index: 1;
+        }
+
+        /* 星星背景装饰 */
+        .stars {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        .star {
+            position: absolute;
+            background: white;
+            border-radius: 50%;
+            animation: twinkle 2s infinite;
+        }
+
+        .star:nth-child(1) {
+            width: 2px;
+            height: 2px;
+            top: 20%;
+            left: 10%;
+            animation-delay: 0s;
+        }
+
+        .star:nth-child(2) {
+            width: 1px;
+            height: 1px;
+            top: 30%;
+            left: 80%;
+            animation-delay: 0.5s;
+        }
+
+        .star:nth-child(3) {
+            width: 2px;
+            height: 2px;
+            top: 60%;
+            left: 20%;
+            animation-delay: 1s;
+        }
+
+        .star:nth-child(4) {
+            width: 2px;
+            height: 2px;
+            top: 88%;
+            left: 70%;
+            animation-delay: 1.5s;
+        }
+
+        .star:nth-child(5) {
+            width: 2px;
+            height: 2px;
+            top: 12%;
+            left: 60%;
+            animation-delay: 0.8s;
+        }
+
+        /* 流星效果 */
+        .meteor {
+            position: absolute;
+            z-index: 0;
+            width: 4px;
+            height: 4px;
+            background: #fff;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #fff, 0 0 20px #fff;
+            animation: meteor-move 2s linear infinite;
+            opacity: 0;
+        }
+
+        .meteor::before {
+            content: '';
+            position: absolute;
+            width: 60px;
+            height: 2px;
+            top: 0;
+            bottom: 0;
+            left: 2px;
+            margin: auto 0;
+            background: linear-gradient(
+                90deg,
+                rgba(255, 255, 255, 0.9),
+                rgba(255, 255, 255, 0.6),
+                rgba(255, 255, 255, 0.2),
+                transparent
+            );
+            transform: translate(-100% -100%);
+            border-radius: 1px;
+        }
+
+        /* 第一颗流星 - 右 */
+        .meteor:nth-child(1) {
+            top: -1%;
+            right: 5%;
+            animation-delay: 4s;
+            animation-duration: 8.2s;
+        }
+
+        .meteor:nth-child(1)::before {
+            width: 70px;
+            background: linear-gradient(
+                90deg,
+                rgba(255, 255, 255, 0.9),
+                rgba(255, 255, 255, 0.5),
+                rgba(255, 255, 255, 0.1),
+                transparent
+            );
+        }
+
+        /* 第二颗流星 - 中 */
+        .meteor:nth-child(2) {
+            top: -1%;
+            right: 40%;
+            animation-delay: 7s;
+            animation-duration: 11.9s;
+        }
+
+        .meteor:nth-child(2)::before {
+            width: 80px;
+            background: linear-gradient(
+                90deg,
+                rgba(255, 255, 255, 0.8),
+                rgba(255, 255, 255, 0.4),
+                rgba(255, 255, 255, 0.1),
+                transparent
+            );
+        }
+
+        /* 第三颗流星 - 左 */
+        .meteor:nth-child(3) {
+            top: -1%;
+            right: 82%;
+            animation-delay: 3s;
+            animation-duration: 9.4s;
+        }
+
+        .meteor:nth-child(3)::before {
+            width: 65px;
+            background: linear-gradient(
+                90deg,
+                rgba(255, 255, 255, 0.85),
+                rgba(255, 255, 255, 0.45),
+                rgba(255, 255, 255, 0.15),
+                transparent
+            );
+        }
+
+        /* 结果区域 */
+        .result-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            padding: 20px;
+            background-color: #fff;
+        }
+
+        .section-header {
+            flex: 0 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            padding-bottom: 10px;
+            user-select: none;
+        }
+
+        .section-title {
+            margin: 0;
+            color: #333;
+            font-size: 1.1em;
+        }
+
+        .result-content {
+            flex: 1 1 0;
+            position: relative;
+            min-height: 200px;
+            padding-top: 20px;
+            line-height: 1.6;
+            border-top: 2px solid #e0e0e0;
+            color: #333;
+            overflow-x: hidden;
+            overflow-y: auto;
+            transition: all 0.2s;
+        }
+
+        .result-content div * {
+            user-select: text;
+        }
+
+        .result-content h1,
+        .result-content h2,
+        .result-content h3 {
+            color: #667eea;
+            margin-top: 0;
+        }
+
+        .result-content pre {
+            position: relative;
+            max-width: 100%;
+            border-radius: 6px;
+            padding: 15px;
+            background: #f4f4f4;
+            overflow-x: auto;
+        }
+
+        .result-content code {
+            display: inline-block !important;
+            max-width: 100%;
+            padding: 2px 4px;
+            white-space: pre-wrap !important;
+            word-break: break-all !important;
+            border-radius: 3px;
+            background: #f4f4f4;
+            font-family: 'Courier New', monospace;
+        }
+
+        .markdown-body {
+            background: none;
+            white-space-collapse: collapse;
+        }
+
+        /* 文本输入区域 */
+        .textarea-container {
+            position: relative;
+            margin-bottom: 20px;
+        }
+
+        .textarea-container label {
+            display: block;
+            margin: 0 0 10px;
+            color: #333;
+            font-size: 1.1em;
+            font-family: Arial, sans-serif;
+        }
+
+        .textarea-container textarea {
+            width: 100%;
+            min-height: 200px;
+            max-height: 35em;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            background: #fff;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            resize: vertical;
+            transition: border-color 0.3s;
+        }
+
+        .textarea-container textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .textarea-container textarea.completing {
+            animation: blink 1s infinite;
+        }
+
+        /* 图标区域 */
+        .icons {
+            position: absolute;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 0.6em;
+            flex-wrap: nowrap;
+            top: 0px;
+            right: 2px;
+            width: 6.5em;
+            height: 1.5em;
+        }
+
+        .icons > * {
+            width: 1.5em;
+            height: 1.5em;
+            line-height: 1.5em;
+            text-align: center;
+            font-size: 1.1em;
+            border-radius: 4px;
+            user-select: none;
+            cursor: pointer;
+        }
+
+        .icons > *:hover {
+            background: rgba(102, 126, 234, 0.3);
+        }
+
+        /* 按钮组 */
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .btn {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 12px 18px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            user-select: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(245, 87, 108, 0.4);
+        }
+
+        .clear-btn {
+            padding: 6px 10px;
+            background: rgb(227, 103, 89);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.3s;
+        }
+
+        .clear-btn:hover {
+            background: rgb(207, 83, 69);
+        }
+
+        .copy-btn {
+            padding: 6px 10px;
+            margin-left: 8px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.3s;
+        }
+
+        .copy-btn:hover {
+            background: #218838;
+        }
+
+        /* 修复模式选择样式 */
+        .fix-mode-container {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            background: #f9f9f9;
+        }
+
+        .fix-mode-container label {
+            display: block;
+            margin-bottom: 10px;
+            color: #333;
+            font-size: 1.1em;
+        }
+
+        .fix-mode-options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .fix-mode-option {
+            display: flex;
+            align-items: flex-start;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .fix-mode-option:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+
+        .fix-mode-option input[type="radio"] {
+            margin-right: 10px;
+            margin-top: 2px;
+        }
+
+        .fix-mode-option input[type="radio"]:checked + .mode-label {
+            color: #667eea;
+        }
+
+        .mode-label {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .mode-label strong {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .mode-label small {
+            font-size: 12px;
+            color: #666;
+            font-style: italic;
+        }
+
+        /* 状态和交互样式 */
+        .btn.disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+
+        .empty-state {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            padding: 50px 20px;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            white-space: pre-wrap;
+            user-select: none !important;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .empty-state.generating {
+            background: #e9e9e9;
+        }
+
+        .empty-state span {
+            position: relative;
+            z-index: 1;
+            user-select: none !important;
+        }
+
+        .generating::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -20px;
+            width: calc(100% + 40px);
+            height: 100%;
+            background: linear-gradient(
+                45deg,
+                transparent 25%,
+                rgba(255, 255, 255, 0.3) 25%,
+                rgba(255, 255, 255, 0.3) 50%,
+                transparent 50%,
+                transparent 75%,
+                rgba(255, 255, 255, 0.3) 75%
+            );
+            background-size: 20px 20px;
+            animation: slide 1s linear infinite;
+        }
+
+        /* 动画和关键帧 */
+        @keyframes blink {
+            0%, 100% {
+                background: #fff;
+            }
+            50% {
+                background: rgba(102, 126, 234, 0.2);
+            }
+        }
+
+        @keyframes meteor-move {
+            0%, 100% {
+                transform: translateX(0) translateY(0) rotate(-45deg);
+                opacity: 0;
+            }
+            1% {
+                opacity: 1;
+            }
+            25% {
+                transform: translateX(-3000%) translateY(3000%) rotate(-45deg);
+                opacity: 1;
+            }
+            30% {
+                transform: translateX(-3600%) translateY(3600%) rotate(-45deg);
+                opacity: 0;
+            }
+            35% {
+                transform: translateX(0) translateY(0) rotate(-45deg);
+                opacity: 0;
+            }
+        }
+
+        @keyframes breath {
+            0%, 100% {
+                transform-origin: 0 100%;
+                transform: scale(1) rotate(0);
+            }
+            50% {
+                transform: scale(1.15) rotate(9deg);
+            }
+        }
+
+        @keyframes twinkle {
+            0%, 100% {
+                opacity: 0.3;
+            }
+            50% {
+                opacity: 1;
+            }
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes slide {
+            0% {
+                transform: translateX(-20px);
+            }
+            100% {
+                transform: translateX(0);
+            }
+        }
+
+        /* 响应式媒体查询 */
+        @media (max-width: 768px) {
+            body {
+                padding: 0;
+            }
+
+            .container {
+                margin: 0;
+                border-radius: 0;
+                padding-bottom: 10px;
+            }
+
+            .main-content {
+                flex-direction: column;
+                min-height: auto;
+            }
+
+            .left-panel {
+                max-width: 100%;
+                border-right: none;
+                border-bottom: 4px solid #e0e0e0;
+            }
+
+            .right-panel {
+                max-width: 100%;
+                flex-direction: column;
+            }
+
+            .textarea-container textarea {
+                min-height: 150px;
+                max-height: 80vh;
+            }
+
+            .button-group {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+            }
+
+            .empty-state {
+                height: auto;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div class="container">
+            <div class="header">
+                <h1>
+                    <span class="rocket" @click="showHelp()">🔧</span>
+                    <span>HTML修复工具</span>
+                    <small class="icon-history" @click="showHistory()">💭</small>
+                </h1>
+                <p>智能修复HTML代码，删除多余标签，根据模板优化结构</p>
+                <div class="stars">
+                    <div class="star"></div>
+                    <div class="star"></div>
+                    <div class="star"></div>
+                    <div class="star"></div>
+                    <div class="star"></div>
+                    <div>
+                        <div class="meteor"></div>
+                        <div class="meteor"></div>
+                        <div class="meteor"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="main-content">
+                <!-- 左侧：输入区域 -->
+                <div class="left-panel">
+                    <div class="textarea-container">
+                        <label for="html-input">
+                            <strong>📝 需要修复的HTML代码：</strong>
+                        </label>
+                        <textarea
+                            id="html-input"
+                            v-model="htmlContent"
+                            :class="{completing: isFixing}"
+                            :readonly="isFixing"
+                            placeholder="在这里输入需要修复的HTML代码..."
+                            @change="saveCache()"
+                            @input="saveCache()"
+                        ></textarea>
+                        <span class="icons" v-cloak>
+                            <span
+                                v-if="htmlContent.length"
+                                class="icon-clear"
+                                title="清空"
+                                @click="clearHtml()"
+                            >❌</span>
+                        </span>
+                    </div>
+
+                    <div class="textarea-container">
+                        <label for="template-input">
+                            <strong>📋 参考模板/案例页面（可选）：</strong>
+                        </label>
+                        <textarea
+                            id="template-input"
+                            v-model="templateContent"
+                            :class="{completing: isFixing}"
+                            :readonly="isFixing"
+                            placeholder="在这里输入参考的HTML模板或案例页面..."
+                            @change="saveCache()"
+                            @input="saveCache()"
+                        ></textarea>
+                        <span class="icons" v-cloak>
+                            <span
+                                v-if="templateContent.length"
+                                class="icon-clear"
+                                title="清空"
+                                @click="clearTemplate()"
+                            >❌</span>
+                        </span>
+                    </div>
+
+                    <!-- 修复模式选择 -->
+                    <div class="fix-mode-container" v-if="templateContent.trim()">
+                        <label for="fix-mode">
+                            <strong>🎯 修复模式：</strong>
+                        </label>
+                        <div class="fix-mode-options">
+                            <label class="fix-mode-option">
+                                <input
+                                    type="radio"
+                                    id="flexible-mode"
+                                    v-model="fixMode"
+                                    value="flexible"
+                                    @change="saveCache()"
+                                />
+                                <span class="mode-label">
+                                    <strong>灵活模式</strong>
+                                    <small>参考模板进行优化，允许适当调整</small>
+                                </span>
+                            </label>
+                            <label class="fix-mode-option">
+                                <input
+                                    type="radio"
+                                    id="strict-mode"
+                                    v-model="fixMode"
+                                    value="strict"
+                                    @change="saveCache()"
+                                />
+                                <span class="mode-label">
+                                    <strong>严格模式</strong>
+                                    <small>严格按照模板格式，100%结构匹配</small>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="button-group" v-cloak>
+                        <button
+                            class="btn btn-primary"
+                            :class="{disabled: isFixing || !htmlContent.trim()}"
+                            @click="executeFix()"
+                        >
+                            <span v-if="isFixing" class="loading"></span>
+                            {{ isFixing ? '修复中...' : '🔧 开始修复' }}
+                        </button>
+
+                        <button
+                            v-if="!isFixing && fixedHtml"
+                            class="btn btn-secondary"
+                            @click="goToPreview()"
+                        >
+                            <span>👁️ 预览效果</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 右侧：结果展示区域 -->
+                <div class="right-panel">
+                    <div class="result-area">
+                        <div class="section-header">
+                            <h2 class="section-title">
+                                <span>✨ 修复结果</span>
+                            </h2>
+                            <span>
+                                <button
+                                    v-if="fixedHtml"
+                                    class="clear-btn"
+                                    v-cloak
+                                    @click="clearResult()"
+                                >
+                                    ❌ 清空
+                                </button>
+                                <button
+                                    v-if="fixedHtml"
+                                    class="copy-btn"
+                                    v-cloak
+                                    @click="copyToClipboard()"
+                                >
+                                    📋 复制代码
+                                </button>
+                            </span>
+                        </div>
+                        <div class="result-content">
+                            <div
+                                v-if="fixedHtml"
+                                class="markdown-body"
+                                v-html="fixedHtmlHtml"
+                            ></div>
+                            <div
+                                v-else
+                                class="empty-state"
+                                :class="{generating: isFixing}"
+                                v-cloak
+                            >
+                                <span>
+                                    {{ !isFixing ? '修复结果将在这里显示...' : '正在修复HTML代码...\n用时约15~30秒，请耐心等候...' }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 引入JS库 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/sweetalert2@11"></script>
+    <script src="https://unpkg.com/showdown/dist/showdown.min.js"></script>
+
+    <script>
+        const { createApp } = Vue;
+
+        window.app = createApp({
+            data() {
+                return {
+                    htmlContent: '',
+                    templateContent: '',
+                    fixedHtml: '',
+                    isFixing: false,
+                    fixMode: 'flexible', // 默认灵活模式
+                    userAgent: window.navigator.userAgent
+                };
+            },
+            computed: {
+                fixedHtmlHtml() {
+                    if (!this.fixedHtml) return '';
+                    const converter = new showdown.Converter();
+                    converter.setOption('simpleLineBreaks', true);
+                    converter.setOption('simplifiedAutoLink', false);
+                    converter.setOption('excludeTrailingPunctuationFromURLs', true);
+                    converter.setOption('literalMidWordUnderscores', true);
+                    converter.setOption('strikethrough', true);
+                    converter.setOption('tasklists', true);
+                    converter.setOption('tables', true);
+                    const str = this.fixedHtml
+                        .replace(/\\\\n/g, '\n')
+                        .replace(/\\n/g, '\n');
+                    return converter.makeHtml(str);
+                }
+            },
+            methods: {
+                warn(text, title = '提示', icon = 'warning', confirmButtonText = '确定') {
+                    return Swal.fire({
+                        title,
+                        text,
+                        icon,
+                        confirmButtonText
+                    });
+                },
+                success(text, title = '成功', timer = 1500) {
+                    return Swal.fire({
+                        icon: 'success',
+                        title,
+                        text,
+                        timer,
+                        showConfirmButton: false
+                    });
+                },
+                showHelp() {
+                    Swal.fire({
+                        title: null,
+                        icon: 'info',
+                        html: `<div class="markdown-body" style="text-align: left">
+                            <p><strong>🔧 HTML修复工具使用说明</strong></p>
+                            <p>这个工具可以帮助您修复HTML代码中的各种问题：</p>
+                            <ol>
+                                <li><strong>语法错误修复</strong>：自动修复未闭合的标签、嵌套错误、属性缺失等问题</li>
+                                <li><strong>结构优化</strong>：删除重复容器、优化过深嵌套、添加必要的HTML结构</li>
+                                <li><strong>语义化改进</strong>：将div标签替换为更语义化的标签（如header、nav、section等）</li>
+                                <li><strong>模板修复模式</strong>：提供两种模板修复模式</li>
+                            </ol>
+                            
+                            <p><strong>🎯 修复模式说明：</strong></p>
+                            <ul>
+                                <li><strong>普通模式</strong>：不提供模板时，AI会按照HTML5标准进行智能修复</li>
+                                <li><strong>灵活模式</strong>：提供模板时，AI会参考模板进行优化，允许适当调整</li>
+                                <li><strong>严格模式</strong>：提供模板时，AI会严格按照模板格式，确保100%结构匹配</li>
+                            </ul>
+                            
+                            <p><strong>使用步骤：</strong></p>
+                            <ol>
+                                <li>在左侧输入需要修复的HTML代码</li>
+                                <li>（可选）输入参考模板或案例页面</li>
+                                <li>（可选）选择修复模式（灵活/严格）</li>
+                                <li>点击"开始修复"按钮</li>
+                                <li>等待AI分析并生成修复后的代码</li>
+                                <li>复制修复后的代码或预览效果</li>
+                            </ol>
+                            <p><small>修复过程通常需要15-30秒，请耐心等待。</small></p>
+                        </div>`,
+                        width: '650px',
+                        confirmButtonText: '我知道了'
+                    });
+                },
+                showHistory() {
+                    const historyList = this.loadHistory();
+                    let historyHtml = `<br><p>这里记录了您修复过的HTML代码，至多保留最近的20条。</p>
+                        <div style="position: relative; max-height: 50vh; overflow: auto;">
+                            <table style="position: relative;">
+                                <colgroup style="width: 7em"></colgroup>
+                                <colgroup style="max-width: 22em"></colgroup>
+                                <colgroup style="width: 4em"></colgroup>
+                                <thead>
+                                    <tr>
+                                        <th>日期</th>
+                                        <th>HTML代码</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${historyList.map(i => {
+                                        return '<tr><td style="white-space: nowrap;">' +
+                                            new Date(i.time).toLocaleDateString() +
+                                            '</td><td><div style="overflow: hidden; text-overflow: ellipsis; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical;">' +
+                                            i.htmlContent.slice(0, 120) +
+                                            '</div></td><td><a href="javascript:void(0)" data-restore>还原</a><br><a href="javascript:void(0)" data-delete style="display: inline-block; margin-top: 0.28em; color: #c00;">删除</a></td>';
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div><hr>`;
+                    
+                    if (!historyList.length) historyHtml = '<br>暂无历史记录';
+                    
+                    const dialog = Swal.fire({
+                        title: null,
+                        icon: null,
+                        width: '38.5em',
+                        html: `${historyHtml}<small>created by FastAPI + Vue.js</small><br><small>2025/1/15</small><br><br><small>HTML修复工具，让代码更规范！</small>`,
+                        inputAutoFocus: false,
+                        showCloseButton: false,
+                        showCancelButton: false,
+                        focusConfirm: false,
+                        confirmButtonText: '&emsp;OK&emsp;',
+                        customClass: {
+                            htmlContainer: 'history-container markdown-body'
+                        }
+                    });
+                    
+                    const bindEvent = () => {
+                        const list = this.loadHistory();
+                        const btnsRestore = [...document.querySelectorAll('.history-container table td a[data-restore]')];
+                        const btnsDelete = [...document.querySelectorAll('.history-container table td a[data-delete]')];
+                        
+                        btnsRestore.forEach((btn, index) => {
+                            btn.onclick = () => {
+                                const history = historyList[index];
+                                this.htmlContent = history.htmlContent || '';
+                                this.templateContent = history.templateContent || '';
+                                this.fixMode = history.fixMode || 'flexible';
+                                dialog.close();
+                                this.saveCache();
+                            };
+                        });
+                        
+                        btnsDelete.forEach((btn, index) => {
+                            btn.onclick = () => {
+                                list.splice(index, 1);
+                                localStorage.setItem('htmlFixHistory', JSON.stringify(list));
+                                btn.closest('tr').remove();
+                                bindEvent();
+                            };
+                        });
+                    };
+                    
+                    setTimeout(() => bindEvent(), 0);
+                },
+                async executeFix() {
+                    if (!this.htmlContent.trim()) {
+                        return this.warn('请输入需要修复的HTML代码！');
+                    }
+                    
+                    if (this.isFixing) return;
+                    
+                    this.isFixing = true;
+                    this.fixedHtml = '';
+                    
+                    // 根据是否有模板内容选择不同的API接口
+                    let apiUrl = '/api/html_fix';
+                    let params = {
+                        html_content: this.htmlContent.trim()
+                    };
+                    
+                    // 如果有模板内容，使用模板修复接口
+                    if (this.templateContent.trim()) {
+                        apiUrl = '/api/html_template_fix';
+                        params = {
+                            html_content: this.htmlContent.trim(),
+                            template_content: this.templateContent.trim(),
+                            fix_mode: this.fixMode
+                        };
+                    }
+                    
+                    const data = await this.apiCall(apiUrl, params);
+                    this.isFixing = false;
+                    
+                    if (!data) return;
+                    
+                    const modeText = this.templateContent.trim() ? 
+                        (this.fixMode === 'strict' ? '严格模板模式' : '灵活模板模式') : 
+                        '普通模式';
+                    
+                    this.success(`HTML修复完成！(${modeText})`, '成功', 2500);
+                    this.fixedHtml = data.fixed_html || '';
+                    this.saveCache();
+                    this.saveHistory();
+                },
+                apiCall(url, data) {
+                    const headers = { 'Content-Type': 'application/json' };
+                    data = JSON.stringify(data);
+                    return fetch(url, {
+                        method: 'POST',
+                        headers,
+                        body: data
+                    })
+                        .then(res => {
+                            return res.json();
+                        })
+                        .then(json => {
+                            if (json.detail) {
+                                this.warn(
+                                    json.detail || '接口调用失败！',
+                                    '错误',
+                                    'error'
+                                );
+                                return null;
+                            }
+                            return json;
+                        })
+                        .catch(e => {
+                            console.error(e);
+                            this.warn('接口调用失败！', '错误', 'error');
+                            return null;
+                        });
+                },
+                async clearHtml() {
+                    if (this.htmlContent.length <= 10) {
+                        this.htmlContent = '';
+                        this.saveCache();
+                        return;
+                    }
+                    const isConfirmed = await this.confirm('确认要清空HTML代码吗？');
+                    if (isConfirmed) {
+                        this.htmlContent = '';
+                        this.saveCache();
+                    }
+                },
+                async clearTemplate() {
+                    if (this.templateContent.length <= 10) {
+                        this.templateContent = '';
+                        this.saveCache();
+                        return;
+                    }
+                    const isConfirmed = await this.confirm('确认要清空模板代码吗？');
+                    if (isConfirmed) {
+                        this.templateContent = '';
+                        this.saveCache();
+                    }
+                },
+                async clearResult() {
+                    const isConfirmed = await this.confirm('确认要清空修复结果吗？');
+                    if (isConfirmed) {
+                        this.fixedHtml = '';
+                        this.saveCache();
+                    }
+                },
+                async copyToClipboard() {
+                    try {
+                        // 提取纯HTML代码，去除markdown格式
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = this.fixedHtmlHtml;
+                        const codeBlocks = tempDiv.querySelectorAll('pre code');
+                        let htmlCode = '';
+                        
+                        if (codeBlocks.length > 0) {
+                            // 如果有代码块，提取代码块内容
+                            htmlCode = codeBlocks[codeBlocks.length - 1].textContent;
+                        } else {
+                            // 否则直接使用原始内容
+                            htmlCode = this.fixedHtml;
+                        }
+                        
+                        await navigator.clipboard.writeText(htmlCode);
+                        this.success('修复后的HTML代码已复制到剪贴板！', '复制成功');
+                    } catch (error) {
+                        console.error('复制失败:', error);
+                        this.warn(
+                            '无法复制到剪贴板，请手动复制！',
+                            '复制失败',
+                            'error'
+                        );
+                    }
+                },
+                goToPreview() {
+                    if (!this.fixedHtml) return;
+                    
+                    // 提取纯HTML代码
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = this.fixedHtmlHtml;
+                    const codeBlocks = tempDiv.querySelectorAll('pre code');
+                    let htmlCode = '';
+                    
+                    if (codeBlocks.length > 0) {
+                        htmlCode = codeBlocks[codeBlocks.length - 1].textContent;
+                    } else {
+                        htmlCode = this.fixedHtml;
+                    }
+                    
+                    // 创建新窗口预览
+                    const previewWindow = window.open('', '_blank', 'width=800,height=600');
+                    previewWindow.document.write(htmlCode);
+                    previewWindow.document.close();
+                },
+                confirm(text, title = '请确认', icon = 'question', confirmButtonText = '确认', cancelButtonText = '取消') {
+                    return Swal.fire({
+                        title,
+                        text,
+                        icon,
+                        confirmButtonText,
+                        cancelButtonText,
+                        showCancelButton: true,
+                        reverseButtons: true
+                    }).then(res => {
+                        return res.isConfirmed;
+                    });
+                },
+                saveCache() {
+                    const cache = {
+                        htmlContent: this.htmlContent || '',
+                        templateContent: this.templateContent || '',
+                        fixedHtml: this.fixedHtml || '',
+                        fixMode: this.fixMode || 'flexible'
+                    };
+                    localStorage.setItem('htmlFixCache', JSON.stringify(cache));
+                },
+                loadCache() {
+                    let cache = localStorage.getItem('htmlFixCache');
+                    if (!cache) return;
+                    cache = JSON.parse(cache);
+                    this.htmlContent = cache.htmlContent || '';
+                    this.templateContent = cache.templateContent || '';
+                    this.fixedHtml = cache.fixedHtml || '';
+                    this.fixMode = cache.fixMode || 'flexible';
+                },
+                saveHistory() {
+                    const historyItem = {
+                        time: Date.now(),
+                        htmlContent: this.htmlContent,
+                        templateContent: this.templateContent,
+                        fixMode: this.fixMode
+                    };
+                    
+                    let historyList = this.loadHistory();
+                    historyList.unshift(historyItem);
+                    historyList = historyList.slice(0, 20); // 保留最近20条
+                    localStorage.setItem('htmlFixHistory', JSON.stringify(historyList));
+                },
+                loadHistory() {
+                    let historyList = [];
+                    try {
+                        const str = localStorage.getItem('htmlFixHistory') || '[]';
+                        historyList = JSON.parse(str);
+                    } catch (e) {}
+                    return historyList;
+                }
+            },
+            mounted() {
+                // 加载缓存
+                this.loadCache();
+                // 自动显示帮助
+                this.showHelp();
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

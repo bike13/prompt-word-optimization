@@ -99,10 +99,14 @@ app.add_middleware(
 )
 
 # 导入路由
-from api.prompt_controller import router as prompt_router
+from api.opt_controller import router as opt_router
+from api.html_controller import router as html_router
+from api.doc_controller import router as doc_router
 
 # 注册路由
-app.include_router(prompt_router, prefix="/api", tags=["prompt"])
+app.include_router(opt_router, prefix="/api", tags=["optimization"])
+app.include_router(html_router, prefix="/api", tags=["html"])
+app.include_router(doc_router, prefix="/api/doc", tags=["document"])
 
 # 静态文件服务
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -112,6 +116,27 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def read_root():
     """返回主页面"""
     with open("static/index.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+@app.get("/html-fix", response_class=HTMLResponse)
+@log_api_call('/html-fix', 'GET')
+async def html_fix_page():
+    """返回HTML修复页面"""
+    with open("static/html_fix.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+@app.get("/prompt", response_class=HTMLResponse)
+@log_api_call('/prompt', 'GET')
+async def prompt_page():
+    """返回提示词优化页面"""
+    with open("static/prompt.html", "r", encoding="utf-8") as f:
+        return HTMLResponse(content=f.read())
+
+@app.get("/doc", response_class=HTMLResponse)
+@log_api_call('/doc', 'GET')
+async def doc_page():
+    """返回文档分析页面"""
+    with open("static/doc.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
 if __name__ == "__main__":
