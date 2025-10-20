@@ -492,12 +492,22 @@ class DocumentGenerator:
             md_content += translated_content + "\n\n"
             
             # 添加图片信息
-            if images:
+            if images and len(images) > 0:
                 md_content += "## 图片内容\n\n"
                 for i, img in enumerate(images):
-                    if img.get('processed'):
-                        md_content += f"### 图片 {i+1}\n\n"
-                        md_content += f"**翻译结果：**\n{img.get('translation_result', '')}\n\n"
+                    page_info = f"第{img.get('page', i+1)}页" if img.get('page') else f"图片{i+1}"
+                    status = "✅ 处理成功" if img.get('processed', False) else "❌ 处理失败"
+                    
+                    md_content += f"### {page_info} {status}\n\n"
+                    
+                    # 添加原图（如果可用）
+                    if img.get('original_image'):
+                        md_content += f"**原图：**\n"
+                        md_content += f"![原图](data:image/png;base64,{img.get('original_image')})\n\n"
+                    
+                    # 添加OCR识别结果
+                    translation_result = img.get('translation_result', 'OCR识别失败')
+                    md_content += f"**OCR识别结果：**\n```\n{translation_result}\n```\n\n"
             
             return md_content
             
@@ -517,12 +527,20 @@ class DocumentGenerator:
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>双语文档</title>
                 <style>
-                    body { font-family: Arial, sans-serif; margin: 40px; }
+                    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
                     .section { margin-bottom: 30px; }
                     .original { background-color: #f5f5f5; padding: 20px; border-left: 4px solid #007acc; }
                     .translated { background-color: #f0f8ff; padding: 20px; border-left: 4px solid #28a745; }
-                    .image-section { margin: 20px 0; }
-                    .image-result { background-color: #fff3cd; padding: 15px; border-radius: 5px; }
+                    .image-section { margin: 30px 0; padding: 20px; border: 1px solid #e9ecef; border-radius: 8px; background: #f8f9fa; }
+                    .image-comparison { display: flex; gap: 20px; flex-wrap: wrap; }
+                    .image-pair { flex: 1; min-width: 300px; }
+                    .image-pair h4 { margin: 0 0 10px 0; color: #495057; }
+                    .image-pair img { max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }
+                    .ocr-result { background: white; padding: 15px; border-radius: 4px; border: 1px solid #dee2e6; 
+                                 white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 14px; }
+                    .ocr-result.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+                    .page-info { color: #6c757d; font-size: 14px; margin-bottom: 15px; }
+                    @media (max-width: 768px) { .image-comparison { flex-direction: column; } }
                 </style>
             </head>
             <body>
@@ -544,19 +562,31 @@ class DocumentGenerator:
             """.format(original_content, translated_content)
             
             # 添加图片信息
-            if images:
+            if images and len(images) > 0:
                 html_content += '<div class="section"><h2>图片内容</h2>'
                 for i, img in enumerate(images):
-                    if img.get('processed'):
-                        html_content += f'''
-                        <div class="image-section">
-                            <h3>图片 {i+1}</h3>
-                            <div class="image-result">
-                                <strong>翻译结果：</strong><br>
-                                {img.get('translation_result', '')}
+                    page_info = f"第{img.get('page', i+1)}页" if img.get('page') else f"图片{i+1}"
+                    original_image = img.get('original_image', '')
+                    translation_result = img.get('translation_result', 'OCR识别失败')
+                    is_processed = img.get('processed', False)
+                    
+                    html_content += f'''
+                    <div class="image-section">
+                        <div class="page-info">{page_info} {'✅ 处理成功' if is_processed else '❌ 处理失败'}</div>
+                        <div class="image-comparison">
+                            <div class="image-pair">
+                                <h4>原图</h4>
+                                <img src="data:image/png;base64,{original_image}" 
+                                     alt="原图" 
+                                     onerror="this.style.display='none'">
+                            </div>
+                            <div class="image-pair">
+                                <h4>OCR识别结果</h4>
+                                <div class="ocr-result {'error' if not is_processed else ''}">{translation_result}</div>
                             </div>
                         </div>
-                        '''
+                    </div>
+                    '''
                 html_content += '</div>'
             
             html_content += """
@@ -643,9 +673,26 @@ class DocumentProcessor:
                 translated_text = self.translate_text(original_text, target_language)
                 logger.info("文本翻译完成")
             
-            # 5. 处理图片 (暂时跳过，避免依赖问题)
+            # 5. 处理图片
             processed_images = []
-            logger.info(f"跳过图片处理，图片数量: {len(parsed_content.get('images', []))}")
+            images = parsed_content.get('images', [])
+            logger.info(f"开始处理图片，图片数量: {len(images)}")
+            
+            for i, img in enumerate(images):
+                if img.get('data'):
+                    logger.info(f"处理第{i+1}张图片...")
+                    processed_img = self.image_processor.process_image(
+                        img['data'], target_language
+                    )
+                    # 保留原始图片信息
+                    processed_img.update({
+                        'page': img.get('page', i+1),
+                        'index': img.get('index', i),
+                        'size': img.get('size', (0, 0)),
+                        'format': img.get('format', 'png')
+                    })
+                    processed_images.append(processed_img)
+                    logger.info(f"第{i+1}张图片处理完成")
             
             # 6. 生成输出文档
             logger.info("开始生成输出文档...")

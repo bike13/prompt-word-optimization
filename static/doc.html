@@ -249,6 +249,79 @@
             background: #f8f9fa;
         }
 
+        .images-container {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .image-item {
+            margin-bottom: 30px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .image-item h5 {
+            margin: 0 0 15px 0;
+            color: #495057;
+            font-size: 16px;
+        }
+
+        .image-comparison {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            align-items: flex-start;
+        }
+
+        .image-pair {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .image-pair h6 {
+            margin: 0 0 10px 0;
+            color: #6c757d;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .image-pair img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        .ocr-result {
+            background: white;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+
+        .ocr-result.error {
+            background: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+
+        @media (max-width: 768px) {
+            .image-comparison {
+                flex-direction: column;
+            }
+            .image-pair {
+                min-width: 100%;
+            }
+        }
+
         .error {
             background: #f8d7da;
             color: #721c24;
@@ -350,6 +423,7 @@
                     <button class="tab active" onclick="showTab('original')">原文</button>
                     <button class="tab" onclick="showTab('translated')">译文</button>
                     <button class="tab" onclick="showTab('summary')">摘要</button>
+                    <button class="tab" onclick="showTab('images')">图片</button>
                 </div>
 
                 <div id="originalTab" class="tab-content active">
@@ -379,6 +453,16 @@
                     </div>
                     <div class="content-preview">
                         <pre id="summaryContent" style="white-space: pre-wrap; word-wrap: break-word; margin: 0;"></pre>
+                    </div>
+                </div>
+
+                <div id="imagesTab" class="tab-content">
+                    <div class="tab-header">
+                        <h4>图片内容</h4>
+                        <span id="imageCount" style="color: #666; font-size: 14px;"></span>
+                    </div>
+                    <div id="imagesContainer" class="images-container">
+                        <!-- 图片内容将在这里动态生成 -->
                     </div>
                 </div>
 
@@ -490,6 +574,9 @@
             // 生成摘要
             generateSummary(originalText);
 
+            // 显示图片
+            displayImages(data.processed_images || []);
+
             // 更新下载按钮
             updateDownloadButtons(data);
 
@@ -528,6 +615,51 @@
             } catch (error) {
                 document.getElementById('summaryContent').textContent = '摘要生成失败: ' + error.message;
             }
+        }
+
+        // 显示图片
+        function displayImages(images) {
+            const container = document.getElementById('imagesContainer');
+            const countElement = document.getElementById('imageCount');
+            
+            if (!images || images.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">暂无图片内容</p>';
+                countElement.textContent = '0 张图片';
+                return;
+            }
+            
+            const processedCount = images.filter(img => img.processed).length;
+            const failedCount = images.length - processedCount;
+            
+            countElement.textContent = `${images.length} 张图片 (成功: ${processedCount}, 失败: ${failedCount})`;
+            
+            let html = '';
+            images.forEach((img, index) => {
+                const pageInfo = img.page ? `第${img.page}页` : `图片${index + 1}`;
+                const originalImage = img.original_image || '';
+                const translationResult = img.translation_result || 'OCR识别失败';
+                const isProcessed = img.processed;
+                
+                html += `
+                    <div class="image-item">
+                        <h5>${pageInfo} ${isProcessed ? '✅' : '❌'}</h5>
+                        <div class="image-comparison">
+                            <div class="image-pair">
+                                <h6>原图</h6>
+                                <img src="data:image/png;base64,${originalImage}" 
+                                     alt="原图" 
+                                     onerror="this.style.display='none'">
+                            </div>
+                            <div class="image-pair">
+                                <h6>OCR识别结果</h6>
+                                <div class="ocr-result ${isProcessed ? '' : 'error'}">${translationResult}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            container.innerHTML = html;
         }
 
         // 更新下载按钮
