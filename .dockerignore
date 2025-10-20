@@ -1,0 +1,16 @@
+# Git
+.git
+.gitignore
+
+
+
+# Virtual environments
+.venv
+
+
+
+
+
+# Documentation
+README.md
+readme.md

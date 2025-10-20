@@ -1,0 +1,11 @@
+# .gitignore
+
+# Python virtual environment
+.venv/
+venv/
+
+
+# Test directory
+test/
+
+
