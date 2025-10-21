@@ -1,6 +1,4 @@
 from fastapi import APIRouter, HTTPException, Body
-from pydantic import BaseModel
-from typing import List, Optional
 import openai
 import os
 from dotenv import load_dotenv
@@ -10,7 +8,7 @@ import time
 load_dotenv()
 
 # 导入prompt_html.py中的提示词
-from prompt_html import prompt_list, get_fix_prompt, get_modelfix_prompt
+from prompt_html import prompt_list,  get_modelfix_prompt, get_fix_prompt
 
 # 导入日志工具
 from utils.logger_utils import logger, log_api_call

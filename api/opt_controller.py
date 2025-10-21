@@ -118,6 +118,8 @@ async def prompt_evaluation(request: dict = Body(...)):
                 {"role": "user", "content": f"```\n{prompt_content}\n```"}
             ],
             temperature=0.3,
+            # 中 推理力度
+            reasoning_effort="medium",
             max_tokens=20000
         )
         response_time = time.time() - start_time
@@ -207,6 +209,8 @@ async def prompt_refinement(request: dict = Body(...)):
                 {"role": "user", "content": user_message}
             ],
             temperature=0.3,
+            # 低 推理力度
+            reasoning_effort="medium",
             max_tokens=20000
         )
         response_time = time.time() - start_time

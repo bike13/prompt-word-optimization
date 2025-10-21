@@ -1,30 +1,31 @@
+# -*- coding: utf-8 -*-
 """
-文档分析AI助手 - 核心实现
-支持多种文档格式的解析、翻译和生成
+文档处理API控制器
 """
-
 import os
-import io
-import base64
-import mimetypes
-import tempfile
 import uuid
-import time
-from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Tuple
+import zipfile
+import shutil
+import base64
+import io
+import asyncio
+import concurrent.futures
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Request, BackgroundTasks
+from fastapi.responses import FileResponse, JSONResponse
+import aiofiles
 import logging
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
-from fastapi.responses import JSONResponse, FileResponse
+# 文档处理依赖
+import fitz  # PyMuPDF
+from docx import Document
+from bs4 import BeautifulSoup
+import requests
+
+# AI相关
 from openai import OpenAI
 from dotenv import load_dotenv
-import PyPDF2
-import pdfplumber
-from docx import Document
-import fitz  # PyMuPDF
-from PIL import Image
-import requests
 
 # 导入提示词配置
 from prompt_doc import (
@@ -33,954 +34,950 @@ from prompt_doc import (
     DOCUMENT_SUMMARY_PROMPT
 )
 
+from utils.logger_utils import log_api_call
+
 load_dotenv()
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 创建FastAPI路由器
-router = APIRouter(tags=["文档处理"])
+router = APIRouter()
 
 
-class ConfigManager:
-    """配置管理类"""
-    
-    def __init__(self):
-        self.openai_api_key = os.getenv("OPENAI_API_KEY")
-        self.openai_api_base = os.getenv("OPENAI_API_BASE")
-        self.openai_api_model = os.getenv("OPENAI_API_MODEL")
-        self.lite_api_model = os.getenv("LITE_TEXT_API_MODEL")
-        self.lite_vis_api_model = os.getenv("LITE_VIS_API_MODEL")
-        
-        # 初始化OpenAI客户端
-        self.openai_client = OpenAI(
-            api_key=self.openai_api_key,
-            base_url=self.openai_api_base,
-        )
-        
-        # 支持的文档格式
-        self.supported_formats = {
-            '.pdf': 'PDF',
-            '.doc': 'Word',
-            '.docx': 'Word',
-            '.rtf': 'RTF',
-            '.txt': 'Text',
-            '.md': 'Markdown',
-            '.html': 'HTML',
-            '.htm': 'HTML'
-        }
-    
-    def get_client(self, use_vision: bool = False) -> OpenAI:
-        """获取OpenAI客户端"""
-        if use_vision and self.openai_api_key:
-            return OpenAI(
-                api_key=self.openai_api_key,
-                base_url=self.openai_api_base,
-            )
-        return self.openai_client
-
-
-class DocumentParser(ABC):
-    """文档解析器抽象基类"""
-    
-    def __init__(self, config: ConfigManager):
-        self.config = config
-    
-    @abstractmethod
-    def parse_content(self, file_path: str) -> Dict[str, Any]:
-        """解析文档内容"""
-        pass
-    
-    @abstractmethod
-    def extract_text(self, file_path: str) -> str:
-        """提取文本内容"""
-        pass
-    
-    @abstractmethod
-    def extract_images(self, file_path: str) -> List[Dict[str, Any]]:
-        """提取图片"""
-        pass
-    
-    @abstractmethod
-    def get_metadata(self, file_path: str) -> Dict[str, Any]:
-        """获取文档元数据"""
-        pass
-    
-    @abstractmethod
-    def get_structure(self, file_path: str) -> Dict[str, Any]:
-        """获取文档结构"""
-        pass
-
-
-class PDFParser(DocumentParser):
-    """PDF文档解析器"""
-    
-    def parse_content(self, file_path: str) -> Dict[str, Any]:
-        """解析PDF文档内容"""
-        try:
-            text_content = self.extract_text(file_path)
-            images = self.extract_images(file_path)
-            metadata = self.get_metadata(file_path)
-            structure = self.get_structure(file_path)
-            
-            return {
-                'text': text_content,
-                'images': images,
-                'metadata': metadata,
-                'structure': structure,
-                'type': 'PDF'
-            }
-        except Exception as e:
-            logger.error(f"PDF解析失败: {e}")
-            raise
-    
-    def extract_text(self, file_path: str) -> str:
-        """提取PDF文本内容"""
-        text_content = ""
-        try:
-            # 首先尝试PyPDF2，因为它更稳定
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                for page_num, page in enumerate(pdf_reader.pages):
-                    try:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text_content += page_text + "\n"
-                    except Exception as e:
-                        logger.warning(f"第{page_num+1}页提取失败: {e}")
-                        continue
-        except Exception as e:
-            logger.error(f"PyPDF2提取失败: {e}")
-            # 如果PyPDF2失败，尝试pdfplumber
-            try:
-                with pdfplumber.open(file_path) as pdf:
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text_content += page_text + "\n"
-            except Exception as e2:
-                logger.error(f"pdfplumber也失败: {e2}")
-        
-        return text_content.strip()
-    
-    def extract_images(self, file_path: str) -> List[Dict[str, Any]]:
-        """提取PDF中的图片"""
-        images = []
-        try:
-            doc = fitz.open(file_path)
-            for page_num in range(len(doc)):
-                page = doc.load_page(page_num)
-                image_list = page.get_images()
-                
-                for img_index, img in enumerate(image_list):
-                    xref = img[0]
-                    pix = fitz.Pixmap(doc, xref)
-                    
-                    if pix.n - pix.alpha < 4:  # 确保不是CMYK
-                        img_data = pix.tobytes("png")
-                        img_base64 = base64.b64encode(img_data).decode()
-                        
-                        images.append({
-                            'page': page_num + 1,
-                            'index': img_index,
-                            'data': img_base64,
-                            'format': 'png',
-                            'size': (pix.width, pix.height)
-                        })
-                    pix = None
-            
-            doc.close()
-        except Exception as e:
-            logger.error(f"PDF图片提取失败: {e}")
-        
-        return images
-    
-    def get_metadata(self, file_path: str) -> Dict[str, Any]:
-        """获取PDF元数据"""
-        try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                metadata = pdf_reader.metadata
-                
-                return {
-                    'title': metadata.get('/Title', '') if metadata else '',
-                    'author': metadata.get('/Author', '') if metadata else '',
-                    'subject': metadata.get('/Subject', '') if metadata else '',
-                    'creator': metadata.get('/Creator', '') if metadata else '',
-                    'producer': metadata.get('/Producer', '') if metadata else '',
-                    'creation_date': metadata.get('/CreationDate', '') if metadata else '',
-                    'modification_date': metadata.get('/ModDate', '') if metadata else '',
-                    'pages': len(pdf_reader.pages)
-                }
-        except Exception as e:
-            logger.error(f"PDF元数据获取失败: {e}")
-            return {}
-    
-    def get_structure(self, file_path: str) -> Dict[str, Any]:
-        """获取PDF文档结构"""
-        try:
-            with pdfplumber.open(file_path) as pdf:
-                structure = {
-                    'pages': len(pdf.pages),
-                    'tables': [],
-                    'outline': []
-                }
-                
-                # 提取表格信息
-                for page_num, page in enumerate(pdf.pages):
-                    tables = page.extract_tables()
-                    if tables:
-                        structure['tables'].append({
-                            'page': page_num + 1,
-                            'count': len(tables)
-                        })
-                
-                return structure
-        except Exception as e:
-            logger.error(f"PDF结构分析失败: {e}")
-            return {'pages': 0, 'tables': [], 'outline': []}
-
-
-class WordParser(DocumentParser):
-    """Word文档解析器"""
-    
-    def parse_content(self, file_path: str) -> Dict[str, Any]:
-        """解析Word文档内容"""
-        try:
-            text_content = self.extract_text(file_path)
-            images = self.extract_images(file_path)
-            metadata = self.get_metadata(file_path)
-            structure = self.get_structure(file_path)
-            
-            return {
-                'text': text_content,
-                'images': images,
-                'metadata': metadata,
-                'structure': structure,
-                'type': 'Word'
-            }
-        except Exception as e:
-            logger.error(f"Word解析失败: {e}")
-            raise
-    
-    def extract_text(self, file_path: str) -> str:
-        """提取Word文本内容"""
-        try:
-            doc = Document(file_path)
-            text_content = ""
-            
-            for paragraph in doc.paragraphs:
-                text_content += paragraph.text + "\n"
-            
-            return text_content.strip()
-        except Exception as e:
-            logger.error(f"Word文本提取失败: {e}")
-            return ""
-    
-    def extract_images(self, file_path: str) -> List[Dict[str, Any]]:
-        """提取Word中的图片"""
-        images = []
-        try:
-            doc = Document(file_path)
-            
-            # 提取内嵌图片
-            for rel in doc.part.rels.values():
-                if "image" in rel.target_ref:
-                    image_data = rel.target_part.blob
-                    img_base64 = base64.b64encode(image_data).decode()
-                    
-                    images.append({
-                        'data': img_base64,
-                        'format': rel.target_ref.split('.')[-1],
-                        'type': 'embedded'
-                    })
-        except Exception as e:
-            logger.error(f"Word图片提取失败: {e}")
-        
-        return images
-    
-    def get_metadata(self, file_path: str) -> Dict[str, Any]:
-        """获取Word元数据"""
-        try:
-            doc = Document(file_path)
-            core_props = doc.core_properties
-            
-            return {
-                'title': core_props.title or '',
-                'author': core_props.author or '',
-                'subject': core_props.subject or '',
-                'keywords': core_props.keywords or '',
-                'created': str(core_props.created) if core_props.created else '',
-                'modified': str(core_props.modified) if core_props.modified else '',
-                'pages': len(doc.paragraphs)
-            }
-        except Exception as e:
-            logger.error(f"Word元数据获取失败: {e}")
-            return {}
-    
-    def get_structure(self, file_path: str) -> Dict[str, Any]:
-        """获取Word文档结构"""
-        try:
-            doc = Document(file_path)
-            structure = {
-                'paragraphs': len(doc.paragraphs),
-                'tables': len(doc.tables),
-                'sections': len(doc.sections),
-                'headings': []
-            }
-            
-            # 提取标题结构
-            for paragraph in doc.paragraphs:
-                if paragraph.style.name.startswith('Heading'):
-                    structure['headings'].append({
-                        'level': paragraph.style.name,
-                        'text': paragraph.text
-                    })
-            
-            return structure
-        except Exception as e:
-            logger.error(f"Word结构分析失败: {e}")
-            return {}
-
-
-class TextParser(DocumentParser):
-    """纯文本解析器"""
-    
-    def parse_content(self, file_path: str) -> Dict[str, Any]:
-        """解析文本文档内容"""
-        try:
-            text_content = self.extract_text(file_path)
-            images = self.extract_images(file_path)  # 文本文件通常没有图片
-            metadata = self.get_metadata(file_path)
-            structure = self.get_structure(file_path)
-            
-            return {
-                'text': text_content,
-                'images': images,
-                'metadata': metadata,
-                'structure': structure,
-                'type': 'Text'
-            }
-        except Exception as e:
-            logger.error(f"文本解析失败: {e}")
-            raise
-    
-    def extract_text(self, file_path: str) -> str:
-        """提取文本内容"""
-        try:
-            # 尝试不同编码
-            encodings = ['utf-8', 'gbk', 'gb2312', 'latin-1']
-            
-            for encoding in encodings:
-                try:
-                    with open(file_path, 'r', encoding=encoding) as file:
-                        return file.read()
-                except UnicodeDecodeError:
-                    continue
-            
-            # 如果所有编码都失败，使用二进制模式读取
-            with open(file_path, 'rb') as file:
-                return file.read().decode('utf-8', errors='ignore')
-                
-        except Exception as e:
-            logger.error(f"文本提取失败: {e}")
-            return ""
-    
-    def extract_images(self, file_path: str) -> List[Dict[str, Any]]:
-        """文本文件通常没有图片"""
-        return []
-    
-    def get_metadata(self, file_path: str) -> Dict[str, Any]:
-        """获取文本文件元数据"""
-        try:
-            stat = os.stat(file_path)
-            return {
-                'size': stat.st_size,
-                'created': stat.st_ctime,
-                'modified': stat.st_mtime,
-                'lines': len(self.extract_text(file_path).split('\n'))
-            }
-        except Exception as e:
-            logger.error(f"文本元数据获取失败: {e}")
-            return {}
-    
-    def get_structure(self, file_path: str) -> Dict[str, Any]:
-        """获取文本文件结构"""
-        try:
-            text = self.extract_text(file_path)
-            lines = text.split('\n')
-            
-            return {
-                'lines': len(lines),
-                'characters': len(text),
-                'words': len(text.split()),
-                'paragraphs': len([p for p in text.split('\n\n') if p.strip()])
-            }
-        except Exception as e:
-            logger.error(f"文本结构分析失败: {e}")
-            return {}
-
-
-class ImageProcessor:
-    """图片处理类"""
-    
-    def __init__(self, config: ConfigManager):
-        self.config = config
-    
-    def process_image(self, image_data: str, target_language: str = "中文") -> Dict[str, Any]:
-        """处理图片：OCR识别和翻译"""
-        try:
-            # 使用视觉模型进行图片翻译
-            client = self.config.get_client(use_vision=True)
-            
-            prompt = IMAGE_TRANSLATION_PROMPT.format(target_language=target_language)
-            
-            response = client.chat.completions.create(
-                model=self.config.lite_vis_api_model or self.config.openai_api_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{image_data}"
-                                },
-                            },
-                            {"type": "text", "text": prompt},
-                        ],
-                    }
-                ],
-            )
-            
-            result = response.choices[0].message.content
-            
-            return {
-                'original_image': image_data,
-                'translation_result': result,
-                'processed': True
-            }
-            
-        except Exception as e:
-            logger.error(f"图片处理失败: {e}")
-            return {
-                'original_image': image_data,
-                'translation_result': f"图片处理失败: {str(e)}",
-                'processed': False
-            }
-
-
-class DocumentGenerator:
-    """文档生成器类"""
-    
-    def __init__(self, config: ConfigManager):
-        self.config = config
-    
-    def generate_markdown(self, original_content: str, translated_content: str, 
-                         images: List[Dict[str, Any]] = None) -> str:
-        """生成Markdown格式的双语文档"""
-        try:
-            md_content = "# 双语文档\n\n"
-            
-            # 添加原文
-            md_content += "## 原文\n\n"
-            md_content += original_content + "\n\n"
-            
-            # 添加译文
-            md_content += "## 译文\n\n"
-            md_content += translated_content + "\n\n"
-            
-            # 添加图片信息
-            if images and len(images) > 0:
-                md_content += "## 图片内容\n\n"
-                for i, img in enumerate(images):
-                    page_info = f"第{img.get('page', i+1)}页" if img.get('page') else f"图片{i+1}"
-                    status = "✅ 处理成功" if img.get('processed', False) else "❌ 处理失败"
-                    
-                    md_content += f"### {page_info} {status}\n\n"
-                    
-                    # 添加原图（如果可用）
-                    if img.get('original_image'):
-                        md_content += f"**原图：**\n"
-                        md_content += f"![原图](data:image/png;base64,{img.get('original_image')})\n\n"
-                    
-                    # 添加OCR识别结果
-                    translation_result = img.get('translation_result', 'OCR识别失败')
-                    md_content += f"**OCR识别结果：**\n```\n{translation_result}\n```\n\n"
-            
-            return md_content
-            
-        except Exception as e:
-            logger.error(f"Markdown生成失败: {e}")
-            return f"文档生成失败: {str(e)}"
-    
-    def generate_html(self, original_content: str, translated_content: str,
-                     images: List[Dict[str, Any]] = None) -> str:
-        """生成HTML格式的双语文档"""
-        try:
-            html_content = """
-            <!DOCTYPE html>
-            <html lang="zh-CN">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>双语文档</title>
-                <style>
-                    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
-                    .section { margin-bottom: 30px; }
-                    .original { background-color: #f5f5f5; padding: 20px; border-left: 4px solid #007acc; }
-                    .translated { background-color: #f0f8ff; padding: 20px; border-left: 4px solid #28a745; }
-                    .image-section { margin: 30px 0; padding: 20px; border: 1px solid #e9ecef; border-radius: 8px; background: #f8f9fa; }
-                    .image-comparison { display: flex; gap: 20px; flex-wrap: wrap; }
-                    .image-pair { flex: 1; min-width: 300px; }
-                    .image-pair h4 { margin: 0 0 10px 0; color: #495057; }
-                    .image-pair img { max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }
-                    .ocr-result { background: white; padding: 15px; border-radius: 4px; border: 1px solid #dee2e6; 
-                                 white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 14px; }
-                    .ocr-result.error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
-                    .page-info { color: #6c757d; font-size: 14px; margin-bottom: 15px; }
-                    @media (max-width: 768px) { .image-comparison { flex-direction: column; } }
-                </style>
-            </head>
-            <body>
-                <h1>双语文档</h1>
-                
-                <div class="section">
-                    <h2>原文</h2>
-                    <div class="original">
-                        <pre>{}</pre>
-                    </div>
-                </div>
-                
-                <div class="section">
-                    <h2>译文</h2>
-                    <div class="translated">
-                        <pre>{}</pre>
-                    </div>
-                </div>
-            """.format(original_content, translated_content)
-            
-            # 添加图片信息
-            if images and len(images) > 0:
-                html_content += '<div class="section"><h2>图片内容</h2>'
-                for i, img in enumerate(images):
-                    page_info = f"第{img.get('page', i+1)}页" if img.get('page') else f"图片{i+1}"
-                    original_image = img.get('original_image', '')
-                    translation_result = img.get('translation_result', 'OCR识别失败')
-                    is_processed = img.get('processed', False)
-                    
-                    html_content += f'''
-                    <div class="image-section">
-                        <div class="page-info">{page_info} {'✅ 处理成功' if is_processed else '❌ 处理失败'}</div>
-                        <div class="image-comparison">
-                            <div class="image-pair">
-                                <h4>原图</h4>
-                                <img src="data:image/png;base64,{original_image}" 
-                                     alt="原图" 
-                                     onerror="this.style.display='none'">
-                            </div>
-                            <div class="image-pair">
-                                <h4>OCR识别结果</h4>
-                                <div class="ocr-result {'error' if not is_processed else ''}">{translation_result}</div>
-                            </div>
-                        </div>
-                    </div>
-                    '''
-                html_content += '</div>'
-            
-            html_content += """
-            </body>
-            </html>
-            """
-            
-            return html_content
-            
-        except Exception as e:
-            logger.error(f"HTML生成失败: {e}")
-            return f"<html><body><h1>文档生成失败</h1><p>{str(e)}</p></body></html>"
+class ImageInfo:
+    """图片信息类"""
+    def __init__(self, image_data: bytes, position: Dict[str, Any], 
+                 image_id: str = None, format: str = "png"):
+        self.image_data = image_data
+        self.position = position  # 包含坐标、页码等信息
+        self.image_id = image_id or str(uuid.uuid4())
+        self.format = format
+        self.base64_data = base64.b64encode(image_data).decode('utf-8')
+        self.mime_type = f"image/{format}"
 
 
 class DocumentProcessor:
-    """核心文档处理类"""
+    """文档处理器"""
     
     def __init__(self):
-        self.config = ConfigManager()
-        self.parsers = {
-            'PDF': PDFParser(self.config),
-            'Word': WordParser(self.config),
-            'Text': TextParser(self.config)
+        """初始化文档处理器"""
+        # 初始化OpenAI客户端
+        self.openai_client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_API_BASE")
+        )
+        self.model = os.getenv("OPENAI_API_MODEL")
+        
+        self.lite_text_model = os.getenv("LITE_TEXT_API_MODEL")
+
+
+        self.tmag_to_tmag_model = os.getenv("TMAG_TO_TMAG_API_MODEL")
+
+
+        # 支持的文档格式
+        self.supported_formats = {
+            '.pdf': self._read_pdf,
+            '.docx': self._read_docx,
+            '.doc': self._read_docx,
+            '.txt': self._read_txt,
+            '.md': self._read_markdown,
+            '.html': self._read_html,
+            '.htm': self._read_html
         }
-        self.image_processor = ImageProcessor(self.config)
-        self.document_generator = DocumentGenerator(self.config)
+        
+        # 并行处理配置
+        self.max_workers = 10  # 并行度为10
+        self.batch_size = 1    # 每次处理一张图片
     
-    def detect_format(self, file_path: str) -> str:
-        """检测文档格式"""
-        file_ext = Path(file_path).suffix.lower()
-        return self.config.supported_formats.get(file_ext, 'Unknown')
+    def get_file_extension(self, file_path: str) -> str:
+        """获取文件扩展名"""
+        return Path(file_path).suffix.lower()
     
-    def translate_text(self, text: str, target_language: str = "中文") -> str:
-        """使用AI翻译文本"""
+    def is_supported_format(self, file_path: str) -> bool:
+        """检查文件格式是否支持"""
+        ext = self.get_file_extension(file_path)
+        return ext in self.supported_formats
+    
+    async def read_document(self, file_path: str) -> Tuple[str, List[ImageInfo]]:
+        """
+        读取文档内容和图片
+        
+        Args:
+            file_path: 文档文件路径
+            
+        Returns:
+            Tuple[文档内容, 图片信息列表]
+        """
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"文件不存在: {file_path}")
+        
+        if not self.is_supported_format(file_path):
+            raise ValueError(f"不支持的文件格式: {self.get_file_extension(file_path)}")
+        
+        ext = self.get_file_extension(file_path)
+        read_func = self.supported_formats[ext]
+                             
         try:
-            client = self.config.get_client()
+            content, images = await read_func(file_path)
+            logger.info(f"成功读取文档: {file_path}, 内容长度: {len(content)}, 图片数量: {len(images)}")
+            return content, images
+        except Exception as e:
+            logger.error(f"读取文档失败: {file_path}, 错误: {str(e)}")
+            raise
+    
+
+    async def _read_pdf(self, file_path: str) -> Tuple[str, List[ImageInfo]]:
+        """读取PDF文档 - 记录图片位置信息"""
+        content = ""
+        images = []
+        
+        try:
+            # 使用PyMuPDF读取PDF
+            doc = fitz.open(file_path)
+            
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                
+                # 提取文本内容
+                text = page.get_text()
+                
+                # 提取图片并记录位置信息
+                image_list = page.get_images()
+                page_images = []
+                
+                for img_index, img in enumerate(image_list):
+                    try:
+                        xref = img[0]
+                        pix = fitz.Pixmap(doc, xref)
+                        
+                        if pix.n - pix.alpha < 4:  # 确保不是CMYK
+                            img_data = pix.tobytes("png")
+                            
+                            # 获取图片位置信息
+                            img_rect = page.get_image_rects(xref)[0] if page.get_image_rects(xref) else None
+                            position = {
+                                "page": page_num + 1,
+                                "index": img_index,
+                                "rect": img_rect.irect if img_rect else None,
+                                "xref": xref
+                            }
+                            
+                            image_info = ImageInfo(
+                                image_data=img_data,
+                                position=position,
+                                format="png"
+                            )
+                            page_images.append(image_info)
+                            images.append(image_info)
+                        
+                        pix = None
+                    except Exception as e:
+                        logger.warning(f"提取PDF图片失败: {str(e)}")
+                        continue
+                
+                # 在文本内容中插入图片位置标记
+                if text.strip():
+                    # 如果有图片，在文本末尾添加图片位置标记
+                    if page_images:
+                        for img_info in page_images:
+                            # 使用图片坐标信息作为唯一标识
+                            img_marker = f"image-{img_info.position['page']}-{img_info.position['index']}-{img_info.position['xref']}.png"
+                            text += f"\n\n![{img_marker}]({img_marker})\n"
+                    
+                    content += f"--- 第 {page_num + 1} 页 ---\n\n{text.strip()}\n\n"
+                else:
+                    # 即使没有文本，如果有图片也要添加图片标记
+                    if page_images:
+                        img_markers = []
+                        for img_info in page_images:
+                            img_marker = f"image-{img_info.position['page']}-{img_info.position['index']}-{img_info.position['xref']}.png"
+                            img_markers.append(f"![{img_marker}]({img_marker})")
+                        content += f"--- 第 {page_num + 1} 页 ---\n\n" + "\n\n".join(img_markers) + "\n\n"
+                    else:
+                        content += f"--- 第 {page_num + 1} 页 ---\n\n[此页无文本内容]\n\n"
+            
+            doc.close()
+            
+            # 如果所有方法都失败，记录警告
+            if not content.strip():
+                logger.warning(f"PDF文件 {file_path} 无法提取文本内容，可能是扫描版PDF或加密PDF")
+                content = f"""[警告] 无法从PDF文件中提取文本内容。"""
+            
+        except Exception as e:
+            logger.error(f"读取PDF失败: {str(e)}")
+            raise
+        
+        return content, images
+    
+    async def _read_docx(self, file_path: str) -> Tuple[str, List[ImageInfo]]:
+        """读取Word文档"""
+        content = ""
+        images = []
+        
+        try:
+            doc = Document(file_path)
+            
+            # 提取文本内容
+            for paragraph in doc.paragraphs:
+                content += paragraph.text + "\n"
+            
+            # 提取表格内容
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = []
+                    for cell in row.cells:
+                        row_text.append(cell.text.strip())
+                    content += " | ".join(row_text) + "\n"
+                content += "\n"
+            
+            # 提取图片
+            # 注意：python-docx对图片提取支持有限，这里使用替代方案
+            # 可以通过解压docx文件来获取图片
+            import zipfile
+            with zipfile.ZipFile(file_path, 'r') as zip_file:
+                for file_info in zip_file.filelist:
+                    if file_info.filename.startswith('word/media/'):
+                        try:
+                            img_data = zip_file.read(file_info.filename)
+                            
+                            # 确定图片格式
+                            ext = Path(file_info.filename).suffix.lower()
+                            if ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
+                                format_name = ext[1:] if ext != '.jpeg' else 'jpg'
+                                
+                                position = {
+                                    "filename": file_info.filename,
+                                    "size": file_info.file_size
+                                }
+                                
+                                image_info = ImageInfo(
+                                    image_data=img_data,
+                                    position=position,
+                                    format=format_name
+                                )
+                                images.append(image_info)
+                        except Exception as e:
+                            logger.warning(f"提取Word图片失败: {str(e)}")
+                            continue
+            
+        except Exception as e:
+            logger.error(f"读取Word文档失败: {str(e)}")
+            raise
+        
+        return content, images
+    
+    async def _read_txt(self, file_path: str) -> Tuple[str, List[ImageInfo]]:
+        """读取TXT文档"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return content, []
+        except UnicodeDecodeError:
+            # 尝试其他编码
+            try:
+                with open(file_path, 'r', encoding='gbk') as f:
+                    content = f.read()
+                return content, []
+            except Exception as e:
+                logger.error(f"读取TXT文档失败: {str(e)}")
+                raise
+    
+    async def _read_markdown(self, file_path: str) -> Tuple[str, List[ImageInfo]]:
+        """读取Markdown文档"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            return content, []
+        except Exception as e:
+            logger.error(f"读取Markdown文档失败: {str(e)}")
+            raise
+    
+    async def _read_html(self, file_path: str) -> Tuple[str, List[ImageInfo]]:
+        """读取HTML文档"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            # 使用BeautifulSoup解析HTML
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # 提取文本内容
+            content = soup.get_text()
+            
+            # 提取图片
+            images = []
+            img_tags = soup.find_all('img')
+            for img_index, img_tag in enumerate(img_tags):
+                src = img_tag.get('src')
+                if src:
+                    try:
+                        # 处理相对路径和绝对路径
+                        if src.startswith('http'):
+                            # 网络图片
+                            response = requests.get(src, timeout=10)
+                            img_data = response.content
+                        else:
+                            # 本地图片
+                            img_path = os.path.join(os.path.dirname(file_path), src)
+                            if os.path.exists(img_path):
+                                with open(img_path, 'rb') as f:
+                                    img_data = f.read()
+                            else:
+                                continue
+                        
+                        # 确定图片格式
+                        format_name = "png"  # 默认格式
+                        if src.lower().endswith(('.jpg', '.jpeg')):
+                            format_name = "jpg"
+                        elif src.lower().endswith('.gif'):
+                            format_name = "gif"
+                        elif src.lower().endswith('.bmp'):
+                            format_name = "bmp"
+                        
+                        position = {
+                            "src": src,
+                            "alt": img_tag.get('alt', ''),
+                            "index": img_index
+                        }
+                        
+                        image_info = ImageInfo(
+                            image_data=img_data,
+                            position=position,
+                            format=format_name
+                        )
+                        images.append(image_info)
+                        
+                    except Exception as e:
+                        logger.warning(f"提取HTML图片失败: {str(e)}")
+                        continue
+            
+            return content, images
+            
+        except Exception as e:
+            logger.error(f"读取HTML文档失败: {str(e)}")
+            raise
+    
+    async def translate_document(self, content: str, target_language: str = "中文") -> str:
+        """
+        翻译文档内容
+        
+        Args:
+            content: 文档内容
+            target_language: 目标语言
+            
+        Returns:
+            翻译后的内容
+        """
+        try:
             prompt = DOCUMENT_TRANSLATION_PROMPT.format(
-                content=text,
+                content=content,
                 target_language=target_language
             )
             
-            response = client.chat.completions.create(
-                model=self.config.openai_api_model,
+            response = self.openai_client.chat.completions.create(
+                model=self.lite_text_model,
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
+                temperature=0.3
             )
             
-            return response.choices[0].message.content
+            translated_content = response.choices[0].message.content
+            logger.info(f"文档翻译完成，原长度: {len(content)}, 翻译后长度: {len(translated_content)}")
+            return translated_content
             
         except Exception as e:
-            logger.error(f"文本翻译失败: {e}")
-            return f"翻译失败: {str(e)}"
+            logger.error(f"文档翻译失败: {str(e)}")
+            raise
     
-    def process_document(self, file_path: str, target_language: str = "中文", 
-                        output_format: str = "markdown") -> Dict[str, Any]:
-        """处理文档的主要方法"""
+    async def translate_images_batch(self, images: List[ImageInfo], target_language: str = "中文") -> List[str]:
+        """
+        并行翻译图片内容（每次处理一张图片，并行度为10）
+        
+        Args:
+            images: 图片信息列表
+            target_language: 目标语言
+            
+        Returns:
+            翻译结果列表
+        """
+        if not images:
+            return []
+        
+        # 创建任务列表，每张图片一个任务
+        tasks = []
+        for image in images:
+            task = self._translate_single_image(image, target_language)
+            tasks.append(task)
+        
+        # 并行执行所有任务，最大并行度为10
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 处理异常结果
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"翻译第{i+1}张图片失败: {str(result)}")
+                processed_results.append(f"翻译失败: {str(result)}")
+            else:
+                processed_results.append(result)
+        
+        return processed_results
+    
+    async def _translate_single_image(self, image: ImageInfo, target_language: str) -> str:
+        """翻译单张图片"""
         try:
-            # 1. 检测文档格式
-            doc_format = self.detect_format(file_path)
-            if doc_format == 'Unknown':
-                raise ValueError(f"不支持的文档格式: {Path(file_path).suffix}")
+            # 构建消息内容
+            user_content = [
+                {"type": "text", "text": IMAGE_TRANSLATION_PROMPT.format(target_language=target_language)},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{image.mime_type};base64,{image.base64_data}"
+                    }
+                }
+            ]
             
-            logger.info(f"开始处理 {doc_format} 文档: {file_path}")
-            
-            # 2. 选择对应的解析器
-            parser = self.parsers.get(doc_format)
-            if not parser:
-                raise ValueError(f"未找到 {doc_format} 解析器")
-            
-            # 3. 解析文档内容
-            logger.info("开始解析文档内容...")
-            parsed_content = parser.parse_content(file_path)
-            logger.info(f"文档解析完成，文本长度: {len(parsed_content.get('text', ''))}")
-            
-            # 4. 翻译文本内容
-            original_text = parsed_content['text']
-            if not original_text.strip():
-                logger.warning("文档中没有提取到文本内容")
-                original_text = "文档中没有可提取的文本内容"
-                translated_text = "No text content could be extracted from the document"
-            else:
-                logger.info("开始翻译文本内容...")
-                translated_text = self.translate_text(original_text, target_language)
-                logger.info("文本翻译完成")
-            
-            # 5. 处理图片
-            processed_images = []
-            images = parsed_content.get('images', [])
-            logger.info(f"开始处理图片，图片数量: {len(images)}")
-            
-            for i, img in enumerate(images):
-                if img.get('data'):
-                    logger.info(f"处理第{i+1}张图片...")
-                    processed_img = self.image_processor.process_image(
-                        img['data'], target_language
-                    )
-                    # 保留原始图片信息
-                    processed_img.update({
-                        'page': img.get('page', i+1),
-                        'index': img.get('index', i),
-                        'size': img.get('size', (0, 0)),
-                        'format': img.get('format', 'png')
-                    })
-                    processed_images.append(processed_img)
-                    logger.info(f"第{i+1}张图片处理完成")
-            
-            # 6. 生成输出文档
-            logger.info("开始生成输出文档...")
-            if output_format.lower() == 'html':
-                output_content = self.document_generator.generate_html(
-                    original_text, translated_text, processed_images
+            # 使用线程池执行API调用
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self._call_vision_api,
+                    user_content
                 )
-            else:
-                output_content = self.document_generator.generate_markdown(
-                    original_text, translated_text, processed_images
-                )
-            logger.info("输出文档生成完成")
+                result = await asyncio.wrap_future(future)
             
-            return {
-                'success': True,
-                'original_content': original_text,
-                'translated_content': translated_text,
-                'processed_images': processed_images,
-                'output_content': output_content,
-                'metadata': parsed_content.get('metadata', {}),
-                'structure': parsed_content.get('structure', {}),
-                'format': doc_format
-            }
+            logger.info(f"成功翻译图片: {image.image_id}")
+            return result
             
         except Exception as e:
-            logger.error(f"文档处理失败: {e}")
-            return {
-                'success': False,
-                'error': str(e),
-                'file_path': file_path
-            }
+            logger.error(f"翻译单张图片失败: {str(e)}")
+            raise
     
-    def generate_summary(self, content: str) -> str:
-        """生成文档摘要"""
-        try:
-            client = self.config.get_client()
-            prompt = DOCUMENT_SUMMARY_PROMPT.format(content=content)
+    def _call_vision_api(self, user_content: List[Dict]) -> str:
+        """调用视觉API"""
+        response = self.openai_client.chat.completions.create(
+            model=self.tmag_to_tmag_model,
+            messages=[
+                {"role": "user", "content": user_content}
+            ],
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+    
+    async def summarize_document(self, content: str, images: List[ImageInfo]) -> str:
+        """
+        总结文档内容
+        
+        Args:
+            content: 文档内容
+            images: 图片信息列表
             
-            response = client.chat.completions.create(
-                model=self.config.openai_api_model,
+        Returns:
+            总结内容
+        """
+        try:
+            # 构建包含图片的提示词
+            image_context = ""
+            if images:
+                image_context = f"\n\n文档包含 {len(images)} 张图片，请结合图片内容进行总结。"
+            
+            prompt = DOCUMENT_SUMMARY_PROMPT.format(content=content) + image_context
+            
+            response = self.openai_client.chat.completions.create(
+                model=self.model,
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
+                temperature=0.3,
+                reasoning_effort="medium"
             )
             
-            return response.choices[0].message.content
+            summary = response.choices[0].message.content
+            logger.info(f"文档总结完成，原长度: {len(content)}, 总结长度: {len(summary)}")
+            return summary
             
         except Exception as e:
-            logger.error(f"摘要生成失败: {e}")
-            return f"摘要生成失败: {str(e)}"
+            logger.error(f"文档总结失败: {str(e)}")
+            raise
+    
+    def combine_document_with_images(self, original_content: str, translated_content: str, 
+                                   original_images: List[ImageInfo], 
+                                   translated_images: List[ImageInfo],
+                                   output_dir: str) -> str:
+        """
+        组合拼接文档和图片
+        
+        Args:
+            original_content: 原始文档内容
+            translated_content: 翻译后的文档内容
+            original_images: 原始图片列表
+            translated_images: 翻译后的图片列表
+            output_dir: 输出目录
+            
+        Returns:
+            拼接后的Markdown内容
+        """
+        try:
+            # 创建assets目录
+            assets_dir = os.path.join(output_dir, "assets")
+            os.makedirs(assets_dir, exist_ok=True)
+            
+            # 创建图片映射字典，用于快速查找图片
+            image_map = {}
+            for orig_img, trans_img in zip(original_images, translated_images):
+                # 使用位置信息创建唯一标识
+                img_key = f"image-{orig_img.position['page']}-{orig_img.position['index']}-{orig_img.position['xref']}.png"
+                
+                # 保存原始图片
+                orig_filename = f"{img_key.replace('.png', '')}-original.{orig_img.format}"
+                orig_path = os.path.join(assets_dir, orig_filename)
+                with open(orig_path, 'wb') as f:
+                    f.write(orig_img.image_data)
+                
+                # 保存翻译后的图片
+                trans_filename = f"{img_key.replace('.png', '')}-translated.{orig_img.format}"
+                trans_path = os.path.join(assets_dir, trans_filename)
+                with open(trans_path, 'wb') as f:
+                    f.write(trans_img.image_data)
+                
+                # 存储图片映射信息
+                image_map[img_key] = {
+                    'original': orig_filename,
+                    'translated': trans_filename,
+                    'position': orig_img.position
+                }
+            
+            # 替换原文中的图片引用
+            processed_original_content = original_content
+            for img_key, img_info in image_map.items():
+                # 替换原文中的图片引用为原始图片
+                original_pattern = f"![{img_key}]({img_key})"
+                original_replacement = f"![{img_key.replace('.png', '-original')}](assets/{img_info['original']})"
+                processed_original_content = processed_original_content.replace(original_pattern, original_replacement)
+            
+            # 替换译文中的图片引用
+            processed_translated_content = translated_content
+            for img_key, img_info in image_map.items():
+                # 替换译文中的图片引用为原始图片和翻译图片的组合
+                translated_pattern = f"![{img_key}]({img_key})"
+                translated_replacement = f"![{img_key.replace('.png', '-translated')}](assets/{img_info['translated']})"
+                processed_translated_content = processed_translated_content.replace(translated_pattern, translated_replacement)
+
+            # 构建Markdown内容
+            markdown_content = f"""# 文档翻译结果
+
+## 原始内容
+{processed_original_content}
+
+## 翻译内容
+{processed_translated_content}
+
+"""
+            
+            return markdown_content
+            
+        except Exception as e:
+            logger.error(f"组合文档失败: {str(e)}")
+            raise
 
 
-# 初始化文档处理器实例
-processor = DocumentProcessor()
+# 初始化文档处理器
+doc_processor = DocumentProcessor()
+
+# 数据目录
+DATA_DIR = "data"
+UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 
 
-# ==================== API接口定义 ====================
+def ensure_directories():
+    """确保必要的目录存在"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+def get_device_dir(device_id: str) -> str:
+    """获取设备目录"""
+    device_dir = os.path.join(UPLOAD_DIR, device_id)
+    os.makedirs(device_dir, exist_ok=True)
+    return device_dir
+
 
 @router.post("/upload")
-async def upload_and_process_document(
+@log_api_call('/api/doc/upload', 'POST')
+async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
-    target_language: str = Form(default="中文"),
-    output_format: str = Form(default="markdown")
+    device_id: str = Form(default="default")
 ):
     """
-    上传并处理文档
+    上传文件接口
     
     Args:
-        file: 上传的文档文件
-        target_language: 目标语言
-        output_format: 输出格式 (markdown/html)
-    
-    Returns:
-        处理结果
-    """
-    tmp_file_path = None
-    try:
-        logger.info(f"开始处理文档上传: {file.filename}")
+        file: 上传的文件
+        device_id: 设备ID，用于区分不同设备的文件
         
-        # 验证文件格式
-        file_ext = Path(file.filename).suffix.lower()
-        if file_ext not in processor.config.supported_formats:
-            logger.error(f"不支持的文档格式: {file_ext}")
+    Returns:
+        上传结果信息
+    """
+    try:
+        ensure_directories()
+        
+        # 检查文件格式
+        if not doc_processor.is_supported_format(file.filename):
             raise HTTPException(
                 status_code=400, 
-                detail=f"不支持的文档格式: {file_ext}"
+                detail=f"不支持的文件格式: {Path(file.filename).suffix}"
             )
         
-        # 检查文件大小 (限制为50MB)
-        file_size = 0
-        content = b""
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
-            while True:
-                chunk = await file.read(8192)  # 8KB chunks
-                if not chunk:
-                    break
-                file_size += len(chunk)
-                if file_size > 50 * 1024 * 1024:  # 50MB limit
-                    raise HTTPException(
-                        status_code=413,
-                        detail="文件大小超过50MB限制"
-                    )
-                tmp_file.write(chunk)
-                content += chunk
-            
-            tmp_file_path = tmp_file.name
+        # 获取设备目录
+        device_dir = get_device_dir(device_id)
         
-        logger.info(f"文件上传完成: {file.filename}, 大小: {file_size} bytes")
+        # 生成唯一文件名
+        file_id = str(uuid.uuid4())
+        file_ext = Path(file.filename).suffix
+        new_filename = f"{file_id}{file_ext}"
+        file_path = os.path.join(device_dir, new_filename)
         
-        # 处理文档
-        logger.info("开始文档处理...")
-        result = processor.process_document(
-            file_path=tmp_file_path,
-            target_language=target_language,
-            output_format=output_format
-        )
+        # 保存文件
+        async with aiofiles.open(file_path, 'wb') as f:
+            content = await file.read()
+            await f.write(content)
         
-        if result['success']:
-            # 保存输出文件
-            output_filename = f"{uuid.uuid4()}.{output_format}"
-            output_path = f"outputs/{output_filename}"
+        # 读取文档内容用于预览
+        try:
+            content, images = await doc_processor.read_document(file_path)
             
-            # 确保输出目录存在
-            os.makedirs("outputs", exist_ok=True)
-            
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(result['output_content'])
-            
-            logger.info(f"文档处理成功: {output_filename}")
-            
-            return JSONResponse({
+            return JSONResponse(content={
                 "success": True,
-                "message": "文档处理成功",
+                "message": "文件上传成功",
                 "data": {
-                    "original_filename": file.filename,
-                    "output_filename": output_filename,
-                    "download_url": f"/api/doc/download/{output_filename}",
-                    "format": result['format'],
-                    "original_length": len(result['original_content']),
-                    "translated_length": len(result['translated_content']),
-                    "images_processed": len(result['processed_images']),
-                    "metadata": result['metadata'],
-                    "structure": result['structure']
+                    "file_id": file_id,
+                    "filename": file.filename,
+                    "file_path": file_path,
+                    "device_id": device_id,
+                    "content_preview": content[:1000] + "..." if len(content) > 1000 else content,
+                    "image_count": len(images),
+                    "file_size": len(content)
                 }
             })
-        else:
-            logger.error(f"文档处理失败: {result['error']}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"文档处理失败: {result['error']}"
-            )
             
-    except HTTPException:
-        raise
+        except Exception as e:
+            logger.error(f"读取上传文件失败: {str(e)}")
+            # 即使读取失败，文件也已上传成功
+            return JSONResponse(content={
+                "success": True,
+                "message": "文件上传成功，但读取内容失败",
+                "data": {
+                    "file_id": file_id,
+                    "filename": file.filename,
+                    "file_path": file_path,
+                    "device_id": device_id,
+                    "error": str(e)
+                }
+            })
+            
     except Exception as e:
-        logger.error(f"文档上传处理异常: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
-    finally:
-        # 清理临时文件
-        if tmp_file_path and os.path.exists(tmp_file_path):
-            try:
-                os.unlink(tmp_file_path)
-                logger.info(f"临时文件已清理: {tmp_file_path}")
-            except Exception as e:
-                logger.warning(f"清理临时文件失败: {e}")
+        logger.error(f"文件上传失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"文件上传失败: {str(e)}")
 
 
-@router.get("/download/{filename}")
-async def download_processed_document(filename: str):
-    """
-    下载处理后的文档
-    
-    Args:
-        filename: 输出文件名
-    
-    Returns:
-        文件下载响应
-    """
-    try:
-        file_path = f"outputs/{filename}"
-        if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="文件不存在")
-        
-        return FileResponse(
-            path=file_path,
-            filename=filename,
-            media_type='application/octet-stream'
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/translate-text")
-async def translate_text(
-    text: str = Form(...),
+@router.post("/translate")
+@log_api_call('/api/doc/translate', 'POST')
+async def translate_document(
+    request: Request,
+    file_id: str = Form(...),
+    device_id: str = Form(default="default"),
     target_language: str = Form(default="中文")
 ):
     """
-    翻译文本内容
+    AI翻译接口
     
     Args:
-        text: 要翻译的文本
+        file_id: 文件ID
+        device_id: 设备ID
         target_language: 目标语言
-    
+        
     Returns:
         翻译结果
     """
     try:
-        translated_text = processor.translate_text(text, target_language)
+        device_dir = get_device_dir(device_id)
         
-        return JSONResponse({
+        # 查找文件
+        file_path = None
+        for file in os.listdir(device_dir):
+            if file.startswith(file_id):
+                file_path = os.path.join(device_dir, file)
+                break
+        
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        # 读取文档内容
+        content, images = await doc_processor.read_document(file_path)
+        
+        # 翻译文档内容
+        translated_content = await doc_processor.translate_document(content, target_language)
+        
+        # 翻译图片内容
+        translated_images = []
+        if images:
+            image_translations = await doc_processor.translate_images_batch(images, target_language)
+            # 创建翻译后的图片信息（这里简化处理）
+            for i, (orig_img, trans_text) in enumerate(zip(images, image_translations)):
+                # 这里应该根据翻译文本生成新的图片，简化处理使用原图
+                translated_images.append(orig_img)
+        
+        # 组合拼接文档
+        original_filename = Path(file_path).stem
+        translated_filename = f"{original_filename}(译文).md"
+        translated_file_path = os.path.join(device_dir, translated_filename)
+        
+        combined_content = doc_processor.combine_document_with_images(
+            content, translated_content, images, translated_images, device_dir
+        )
+        
+        # 保存翻译结果
+        async with aiofiles.open(translated_file_path, 'w', encoding='utf-8') as f:
+            await f.write(combined_content)
+        
+        return JSONResponse(content={
             "success": True,
+            "message": "翻译完成",
             "data": {
-                "original_text": text,
-                "translated_text": translated_text,
-                "target_language": target_language
+                "file_id": file_id,
+                "translated_content": combined_content,
+                "translated_file_path": translated_file_path,
+                "original_length": len(content),
+                "translated_length": len(translated_content),
+                "image_count": len(images)
             }
         })
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"文档翻译失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"翻译失败: {str(e)}")
 
 
-@router.post("/generate-summary")
-async def generate_summary(
-    content: str = Form(...)
+@router.post("/summarize")
+@log_api_call('/api/doc/summarize', 'POST')
+async def summarize_document(
+    request: Request,
+    file_id: str = Form(...),
+    device_id: str = Form(default="default")
 ):
     """
-    生成文档摘要
+    AI总结接口
     
     Args:
-        content: 文档内容
-    
+        file_id: 文件ID
+        device_id: 设备ID
+        
     Returns:
-        摘要结果
+        总结结果
     """
     try:
-        summary = processor.generate_summary(content)
+        device_dir = get_device_dir(device_id)
         
-        return JSONResponse({
+        # 查找文件
+        file_path = None
+        for file in os.listdir(device_dir):
+            if file.startswith(file_id):
+                file_path = os.path.join(device_dir, file)
+                break
+        
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        # 读取文档内容
+        content, images = await doc_processor.read_document(file_path)
+        
+        # 总结文档内容
+        summary = await doc_processor.summarize_document(content, images)
+        
+        # 保存总结结果
+        original_filename = Path(file_path).stem
+        summary_filename = f"{original_filename}(总结).md"
+        summary_file_path = os.path.join(device_dir, summary_filename)
+        
+        async with aiofiles.open(summary_file_path, 'w', encoding='utf-8') as f:
+            await f.write(summary)
+        
+        return JSONResponse(content={
             "success": True,
+            "message": "总结完成",
             "data": {
-                "original_content": content,
-                "summary": summary
+                "file_id": file_id,
+                "summary": summary,
+                "summary_file_path": summary_file_path,
+                "original_length": len(content),
+                "summary_length": len(summary),
+                "image_count": len(images)
             }
         })
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"文档总结失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"总结失败: {str(e)}")
 
 
-@router.get("/supported-formats")
-async def get_supported_formats():
+@router.get("/download/{device_id}")
+@log_api_call('/api/doc/download', 'GET')
+async def download_files(device_id: str, background_tasks: BackgroundTasks):
     """
-    获取支持的文档格式列表
+    下载文件接口
     
+    Args:
+        device_id: 设备ID
+        
     Returns:
-        支持的格式列表
-    """
-    return JSONResponse({
-        "success": True,
-        "data": {
-            "formats": processor.config.supported_formats,
-            "output_formats": ["markdown", "html"]
-        }
-    })
-
-
-@router.post("/test-upload")
-async def test_upload():
-    """
-    测试上传接口是否正常工作
-    
-    Returns:
-        测试结果
+        ZIP文件下载
     """
     try:
-        logger.info("测试上传接口")
-        return JSONResponse({
-            "success": True,
-            "message": "上传接口正常工作",
-            "timestamp": time.time()
-        })
+        device_dir = get_device_dir(device_id)
+        
+        if not os.path.exists(device_dir):
+            raise HTTPException(status_code=404, detail="设备目录不存在")
+        
+        # 检查目录是否为空
+        files = os.listdir(device_dir)
+        if not files:
+            raise HTTPException(status_code=404, detail="没有文件可下载")
+        
+        # 创建ZIP文件
+        zip_filename = f"{device_id}_files.zip"
+        zip_path = os.path.join(DATA_DIR, zip_filename)
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root, dirs, files in os.walk(device_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, device_dir)
+                    zipf.write(file_path, arcname)
+        
+        # 定义清理函数
+        def cleanup_files():
+            """删除临时文件"""
+            try:
+                # 延迟删除，确保文件下载完成
+                import time
+                time.sleep(2)
+                
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
+                    logger.info(f"已删除临时ZIP文件: {zip_path}")
+                
+                # 删除设备目录
+                if os.path.exists(device_dir):
+                    shutil.rmtree(device_dir)
+                    logger.info(f"已删除设备目录: {device_dir}")
+                    
+            except Exception as e:
+                logger.error(f"清理临时文件失败: {str(e)}")
+        
+        # 添加后台任务，在响应发送后清理文件
+        background_tasks.add_task(cleanup_files)
+        
+        # 使用FileResponse返回文件
+        response = FileResponse(
+            path=zip_path,
+            filename=zip_filename,
+            media_type='application/zip'
+        )
+        
+        return response
+        
     except Exception as e:
-        logger.error(f"测试上传接口失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"文件下载失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"下载失败: {str(e)}")
 
 
+@router.get("/list/{device_id}")
+@log_api_call('/api/doc/list', 'GET')
+async def list_files(device_id: str):
+    """
+    列出设备文件
+    
+    Args:
+        device_id: 设备ID
+        
+    Returns:
+        文件列表
+    """
+    try:
+        device_dir = get_device_dir(device_id)
+        
+        if not os.path.exists(device_dir):
+            return JSONResponse(content={
+                "success": True,
+                "data": {
+                    "files": [],
+                    "device_id": device_id
+                }
+            })
+        
+        files = []
+        for file in os.listdir(device_dir):
+            file_path = os.path.join(device_dir, file)
+            if os.path.isfile(file_path):
+                stat = os.stat(file_path)
+                files.append({
+                    "filename": file,
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "file_id": file.split('.')[0] if '.' in file else file
+                })
+        
+        return JSONResponse(content={
+            "success": True,
+            "data": {
+                "files": files,
+                "device_id": device_id
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"列出文件失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"列出文件失败: {str(e)}")
 
 
+@router.delete("/delete/{device_id}/{file_id}")
+@log_api_call('/api/doc/delete', 'DELETE')
+async def delete_file(device_id: str, file_id: str):
+    """
+    删除文件
+    
+    Args:
+        device_id: 设备ID
+        file_id: 文件ID
+        
+    Returns:
+        删除结果
+    """
+    try:
+        device_dir = get_device_dir(device_id)
+        
+        # 查找并删除文件
+        deleted_files = []
+        for file in os.listdir(device_dir):
+            if file.startswith(file_id):
+                file_path = os.path.join(device_dir, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                    deleted_files.append(file)
+        
+        if not deleted_files:
+            raise HTTPException(status_code=404, detail="文件不存在")
+        
+        return JSONResponse(content={
+            "success": True,
+            "message": "文件删除成功",
+            "data": {
+                "deleted_files": deleted_files,
+                "device_id": device_id,
+                "file_id": file_id
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"删除文件失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
