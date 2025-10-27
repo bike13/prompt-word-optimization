@@ -22,3 +22,7 @@ zipfile38>=0.0.3
 # OCR支持
 pytesseract>=0.3.10
 opencv-python>=4.8.0 
+
+fastmcp>=0.2.0
+# Neo4j数据库驱动
+neo4j>=5.0.0
