@@ -30,7 +30,8 @@ from dotenv import load_dotenv
 # 导入提示词配置
 from prompt_doc import (
     DOCUMENT_TRANSLATION_PROMPT,
-    IMAGE_TRANSLATION_PROMPT,
+    IMAGE_TRANSLATION_IMAGE_PROMPT,
+    IMAGE_TRANSLATION_TEXT_PROMPT,
     DOCUMENT_SUMMARY_PROMPT
 )
 
@@ -71,6 +72,8 @@ class DocumentProcessor:
 
 
         self.tmag_to_tmag_model = os.getenv("TMAG_TO_TMAG_API_MODEL")
+
+        self.tmag_to_text_model = os.getenv("VISION_API_MODEL")
 
 
         # 支持的文档格式
@@ -389,24 +392,92 @@ class DocumentProcessor:
             logger.error(f"文档翻译失败: {str(e)}")
             raise
     
-    async def translate_images_batch(self, images: List[ImageInfo], target_language: str = "中文") -> List[str]:
+    async def translate_images_image_batch(self, images: List[ImageInfo], target_language: str = "中文") -> List[ImageInfo]:
         """
         并行翻译图片内容（每次处理一张图片，并行度为10）
+        集成版本：所有逻辑都在此方法内，不调用其他方法
         
         Args:
             images: 图片信息列表
             target_language: 目标语言
             
         Returns:
-            翻译结果列表
+            翻译后的图片信息列表
         """
         if not images:
             return []
         
+        # 定义内部函数：翻译单张图片
+        async def translate_single_image(image: ImageInfo, target_language: str) -> ImageInfo:
+            """内部函数：翻译单张图片"""
+            max_retries = 3
+            delay = 1.0
+            
+            for attempt in range(max_retries):
+                try:
+                    # 构建消息内容 - 使用图片翻译提示词
+                    messages = [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": IMAGE_TRANSLATION_IMAGE_PROMPT.format(target_language=target_language)},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{image.mime_type};base64,{image.base64_data}"
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                    
+                    # 使用线程池执行API调用
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(
+                            self.openai_client.chat.completions.create,
+                            model=self.tmag_to_tmag_model,
+                            messages=messages,
+                            temperature=0.3
+                        )
+                        response = future.result()
+                        translated_text = response.choices[0].message.content
+                        
+                        # 创建翻译后的图片信息（这里简化处理，使用原图数据）
+                        # 在实际应用中，这里应该根据translated_text生成新的图片
+                        translated_image = ImageInfo(
+                            image_data=image.image_data,
+                            position=image.position,
+                            image_id=f"{image.image_id}_translated",
+                            format=image.format
+                        )
+                        return translated_image
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.warning(f"翻译图片失败 (尝试 {attempt + 1}/{max_retries}): {error_msg}")
+                    
+                    # 检查是否是可重试的错误
+                    retryable_errors = ['500', 'InternalServiceError', 'rate_limit', 'timeout', 'InternalServerError']
+                    if any(error in error_msg for error in retryable_errors) and attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt)  # 指数退避
+                        logger.info(f"等待 {wait_time:.1f} 秒后重试...")
+                        await asyncio.sleep(wait_time)
+                        continue
+                    
+                    # 不可重试的错误或达到最大重试次数
+                    logger.error(f"翻译图片最终失败: {error_msg}")
+                    raise e
+            
+            # 如果所有重试都失败了，返回原图
+            logger.warning(f"图片翻译失败，返回原图")
+            return image
+
+        
+        
         # 创建任务列表，每张图片一个任务
         tasks = []
         for image in images:
-            task = self._translate_single_image(image, target_language)
+            task = translate_single_image(image, target_language)
             tasks.append(task)
         
         # 并行执行所有任务，最大并行度为10
@@ -423,12 +494,91 @@ class DocumentProcessor:
         
         return processed_results
     
-    async def _translate_single_image(self, image: ImageInfo, target_language: str) -> str:
+    async def translate_images_text_batch(self, images: List[ImageInfo], target_language: str = "中文") -> List[str]:
+        """
+        并行翻译图片内容（每次处理一张图片，并行度为10）
+        集成版本：所有逻辑都在此方法内，不调用其他方法
+        
+        Args:
+            images: 图片信息列表
+            target_language: 目标语言
+            
+        Returns:
+            翻译结果列表
+        """
+        if not images:
+            return []
+        
+        # 定义内部函数：翻译单张图片
+        async def translate_single_image(image: ImageInfo, target_language: str) -> str:
+            """内部函数：翻译单张图片"""
+            try:
+                # 构建消息内容 - 使用图片翻译提示词
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": IMAGE_TRANSLATION_IMAGE_PROMPT.format(target_language=target_language)},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{image.mime_type};base64,{image.base64_data}"
+                                }
+                            }
+                        ]
+                    }
+                ]
+                
+                # 使用线程池执行同步API调用
+                loop = asyncio.get_event_loop()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        self.openai_client.chat.completions.create,
+                        model=self.tmag_to_text_model,
+                        messages=messages,
+                        temperature=0.3
+                    )
+                    response = await loop.run_in_executor(None, future.result)
+                    return response.choices[0].message.content
+                    
+            except Exception as e:
+                logger.error(f"翻译图片失败: {str(e)}")
+                raise e
+
+        # 使用信号量控制并发度
+        semaphore = asyncio.Semaphore(10)
+        
+        async def translate_with_semaphore(image: ImageInfo, target_language: str) -> str:
+            async with semaphore:
+                return await translate_single_image(image, target_language)
+        
+        # 创建任务列表，每张图片一个任务
+        tasks = []
+        for image in images:
+            task = translate_with_semaphore(image, target_language)
+            tasks.append(task)
+        
+        # 并行执行所有任务，最大并行度为10
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 处理异常结果
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"翻译第{i+1}张图片失败: {str(result)}")
+                processed_results.append(f"翻译失败: {str(result)}")
+            else:
+                processed_results.append(result)
+        
+        return processed_results
+
+
+    async def _translate_single_image_text(self, image: ImageInfo, target_language: str) -> str:
         """翻译单张图片"""
         try:
             # 构建消息内容
             user_content = [
-                {"type": "text", "text": IMAGE_TRANSLATION_PROMPT.format(target_language=target_language)},
+                {"type": "text", "text": IMAGE_TRANSLATION_TEXT_PROMPT.format(target_language=target_language)},
                 {
                     "type": "image_url",
                     "image_url": {
@@ -452,16 +602,6 @@ class DocumentProcessor:
             logger.error(f"翻译单张图片失败: {str(e)}")
             raise
     
-    def _call_vision_api(self, user_content: List[Dict]) -> str:
-        """调用视觉API"""
-        response = self.openai_client.chat.completions.create(
-            model=self.tmag_to_tmag_model,
-            messages=[
-                {"role": "user", "content": user_content}
-            ],
-            temperature=0.3
-        )
-        return response.choices[0].message.content
     
     async def summarize_document(self, content: str, images: List[ImageInfo]) -> str:
         """
@@ -501,20 +641,24 @@ class DocumentProcessor:
     
     def combine_document_with_images(self, original_content: str, translated_content: str, 
                                    original_images: List[ImageInfo], 
-                                   translated_images: List[ImageInfo],
+                                   image_translations: List[str],
                                    output_dir: str) -> str:
         """
-        组合拼接文档和图片
+        组合拼接文档和图片，将图片翻译文字放在原图下方
         
         Args:
             original_content: 原始文档内容
-            translated_content: 翻译后的文档内容
+            translated_content: 翻译后的文档内容（可能包含图片标记）
             original_images: 原始图片列表
-            translated_images: 翻译后的图片列表
+            image_translations: 图片翻译文字列表
             output_dir: 输出目录
             
         Returns:
             拼接后的Markdown内容
+            
+        Note:
+            - 原始内容部分：显示原图 + 翻译文字
+            - 翻译内容部分：用原图 + 翻译文字替换原有的图片位置标记
         """
         try:
             # 创建assets目录
@@ -523,7 +667,7 @@ class DocumentProcessor:
             
             # 创建图片映射字典，用于快速查找图片
             image_map = {}
-            for orig_img, trans_img in zip(original_images, translated_images):
+            for i, (orig_img, trans_text) in enumerate(zip(original_images, image_translations)):
                 # 使用位置信息创建唯一标识
                 img_key = f"image-{orig_img.position['page']}-{orig_img.position['index']}-{orig_img.position['xref']}.png"
                 
@@ -533,33 +677,28 @@ class DocumentProcessor:
                 with open(orig_path, 'wb') as f:
                     f.write(orig_img.image_data)
                 
-                # 保存翻译后的图片
-                trans_filename = f"{img_key.replace('.png', '')}-translated.{orig_img.format}"
-                trans_path = os.path.join(assets_dir, trans_filename)
-                with open(trans_path, 'wb') as f:
-                    f.write(trans_img.image_data)
-                
-                # 存储图片映射信息
+                # 存储图片映射信息（译文部分使用原图+翻译文字）
                 image_map[img_key] = {
                     'original': orig_filename,
-                    'translated': trans_filename,
+                    'translation': trans_text,
                     'position': orig_img.position
                 }
             
-            # 替换原文中的图片引用
+            # 替换原文中的图片引用，将图片和翻译文字组合显示
             processed_original_content = original_content
             for img_key, img_info in image_map.items():
-                # 替换原文中的图片引用为原始图片
+                # 替换原文中的图片引用为图片+翻译文字的组合
                 original_pattern = f"![{img_key}]({img_key})"
-                original_replacement = f"![{img_key.replace('.png', '-original')}](assets/{img_info['original']})"
-                processed_original_content = processed_original_content.replace(original_pattern, original_replacement)
+                processed_original_content = processed_original_content.replace(original_pattern)
             
-            # 替换译文中的图片引用
+            # 替换译文中的图片引用：用原图+翻译文字替换原有的图片位置标记
             processed_translated_content = translated_content
             for img_key, img_info in image_map.items():
-                # 替换译文中的图片引用为原始图片和翻译图片的组合
+                # 在翻译内容中，如果存在图片标记，用原图+翻译文字的组合替换它
                 translated_pattern = f"![{img_key}]({img_key})"
-                translated_replacement = f"![{img_key.replace('.png', '-translated')}](assets/{img_info['translated']})"
+                translated_replacement = f"""![{img_key.replace('.png', '-original')}](assets/{img_info['original']})
+
+**图片翻译：** {img_info['translation']}"""
                 processed_translated_content = processed_translated_content.replace(translated_pattern, translated_replacement)
 
             # 构建Markdown内容
@@ -718,14 +857,14 @@ async def translate_document(
         # 翻译文档内容
         translated_content = await doc_processor.translate_document(content, target_language)
         
-        # 翻译图片内容
+        # 翻译图片内容为文字和图片
+        image_translations = []
         translated_images = []
         if images:
-            image_translations = await doc_processor.translate_images_batch(images, target_language)
-            # 创建翻译后的图片信息（这里简化处理）
-            for i, (orig_img, trans_text) in enumerate(zip(images, image_translations)):
-                # 这里应该根据翻译文本生成新的图片，简化处理使用原图
-                translated_images.append(orig_img)
+            # 获取图片翻译文字
+            image_translations = await doc_processor.translate_images_text_batch(images, target_language)
+            # 获取翻译后的图片
+            # translated_images = await doc_processor.translate_images_image_batch(images, target_language)
         
         # 组合拼接文档
         original_filename = Path(file_path).stem
@@ -733,7 +872,7 @@ async def translate_document(
         translated_file_path = os.path.join(device_dir, translated_filename)
         
         combined_content = doc_processor.combine_document_with_images(
-            content, translated_content, images, translated_images, device_dir
+            content, translated_content, images, image_translations,  device_dir
         )
         
         # 保存翻译结果
