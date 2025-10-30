@@ -518,7 +518,7 @@ class DocumentProcessor:
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": IMAGE_TRANSLATION_IMAGE_PROMPT.format(target_language=target_language)},
+                            {"type": "text", "text": IMAGE_TRANSLATION_TEXT_PROMPT.format(target_language=target_language)},
                             {
                                 "type": "image_url",
                                 "image_url": {
@@ -572,36 +572,6 @@ class DocumentProcessor:
         
         return processed_results
 
-
-    async def _translate_single_image_text(self, image: ImageInfo, target_language: str) -> str:
-        """翻译单张图片"""
-        try:
-            # 构建消息内容
-            user_content = [
-                {"type": "text", "text": IMAGE_TRANSLATION_TEXT_PROMPT.format(target_language=target_language)},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{image.mime_type};base64,{image.base64_data}"
-                    }
-                }
-            ]
-            
-            # 使用线程池执行API调用
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    self._call_vision_api,
-                    user_content
-                )
-                result = await asyncio.wrap_future(future)
-            
-            logger.info(f"成功翻译图片: {image.image_id}")
-            return result
-            
-        except Exception as e:
-            logger.error(f"翻译单张图片失败: {str(e)}")
-            raise
-    
     
     async def summarize_document(self, content: str, images: List[ImageInfo]) -> str:
         """
@@ -689,7 +659,8 @@ class DocumentProcessor:
             for img_key, img_info in image_map.items():
                 # 替换原文中的图片引用为图片+翻译文字的组合
                 original_pattern = f"![{img_key}]({img_key})"
-                processed_original_content = processed_original_content.replace(original_pattern)
+                original_replacement = f"""![{img_key.replace('.png', '-original')}](assets/{img_info['original']})"""
+                processed_original_content = processed_original_content.replace(original_pattern, original_replacement)
             
             # 替换译文中的图片引用：用原图+翻译文字替换原有的图片位置标记
             processed_translated_content = translated_content
@@ -698,12 +669,12 @@ class DocumentProcessor:
                 translated_pattern = f"![{img_key}]({img_key})"
                 translated_replacement = f"""![{img_key.replace('.png', '-original')}](assets/{img_info['original']})
 
-**图片翻译：** {img_info['translation']}"""
+**图片翻译：** 
+{img_info['translation']}"""
                 processed_translated_content = processed_translated_content.replace(translated_pattern, translated_replacement)
 
             # 构建Markdown内容
-            markdown_content = f"""# 文档翻译结果
-
+            markdown_content = f"""
 ## 原始内容
 {processed_original_content}
 
